@@ -85,7 +85,7 @@ class MatrixSphere3D:
 
         # 2. On dessine les sommets (Vertices) brillants
         for px, py in projected:
-            cv2.circle(img, (px, py), 2, (150, 255, 150), -1, cv2.LINE_AA)
+            cv2.circle(img, (px, py), 2, (106,50,159), -1, cv2.LINE_AA)
             
         # Effet visuel si la sphère est pincée (elle devient plus brillante)
         if len(self.pinches) > 0:
@@ -217,7 +217,7 @@ def main():
             cx, cy = (tx + ix) // 2, (ty + iy) // 2
             distance = math.hypot(tx - ix, ty - iy)
             
-            if distance < 25:
+            if distance < 35:
                 active_pinches.append((cx, cy))
                 cv2.circle(display, (cx, cy), 8, (0, 255, 0), -1)
 
