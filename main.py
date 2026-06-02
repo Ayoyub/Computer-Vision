@@ -12,7 +12,7 @@ class MatrixSphere3D:
         self.x = x
         self.y = y
         self.radius = radius
-        self.color = (0, 255, 0) # Vert "Matrix" pur
+        self.color = (106,50,159)
         self.pinches = []
         
         # Interactions
@@ -55,8 +55,8 @@ class MatrixSphere3D:
 
     def draw(self, img):
         # Faire tourner la sphère doucement à chaque frame
-        self.angle_y += 0.03
-        self.angle_x += 0.015
+        self.angle_y += 0.003
+        self.angle_x += 0.003
         
         cos_y, sin_y = math.cos(self.angle_y), math.sin(self.angle_y)
         cos_x, sin_x = math.cos(self.angle_x), math.sin(self.angle_x)
