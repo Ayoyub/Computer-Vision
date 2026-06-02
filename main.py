@@ -250,13 +250,20 @@ def main():
                 i1x, i1y = int(index1[0]*scale_x), int(index1[1]*scale_y)
                 i2x, i2y = int(index2[0]*scale_x), int(index2[1]*scale_y)
 
-                # Si les pouces se touchent ET les index se touchent
-                if math.hypot(t1x-t2x, t1y-t2y) < 60 and math.hypot(i1x-i2x, i1y-i2y) < 60:
-                    if spawn_cooldown == 0:
-                        cx = (t1x + t2x + i1x + i2x) // 4
-                        cy = (t1y + t2y + i1y + i2y) // 4
-                        shapes.append(MatrixPyramid3D(cx, cy, 80))
-                        spawn_cooldown = 90
+                # NOUVEAU : On calcule l'écartement des doigts d'une MÊME main
+                spread1 = math.hypot(t1x - i1x, t1y - i1y)
+                spread2 = math.hypot(t2x - i2x, t2y - i2y)
+
+                # SÉCURITÉ ANTI-PINCEMENT : Les doigts doivent être tendus (écartés de + de 50px)
+                if spread1 > 50 and spread2 > 50:
+
+                    # Si les pouces se touchent ET les index se touchent
+                    if math.hypot(t1x-t2x, t1y-t2y) < 60 and math.hypot(i1x-i2x, i1y-i2y) < 60:
+                        if spawn_cooldown == 0:
+                            cx = (t1x + t2x + i1x + i2x) // 4
+                            cy = (t1y + t2y + i1y + i2y) // 4
+                            shapes.append(MatrixPyramid3D(cx, cy, 80))
+                            spawn_cooldown = 180
 
         # --- RECHERCHE DES PINCEMENTS ---
         active_pinches = []
