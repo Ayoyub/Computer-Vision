@@ -1,3 +1,5 @@
+import subprocess
+import sys
 import cv2
 import threading
 import time
@@ -25,6 +27,10 @@ class MatrixSphere3D:
         self.last_pinch_time = 0
         self.was_pinched_last_frame = False
         self.to_delete = False
+
+        # --- Variables pour la rotation manuelle (Poing) ---
+        self.is_rotating_manually = False
+        self.last_pinch_pos = (0, 0)
         
         self.nodes = []
         self.edges = []
@@ -50,8 +56,11 @@ class MatrixSphere3D:
                 self.edges.append((current, next_i))
 
     def draw(self, img):
-        self.angle_y += 0.003
-        self.angle_x += 0.003
+        # La rotation auto s'arrête si on tourne à la main
+        if not self.is_rotating_manually:
+            self.angle_y += 0.003
+            self.angle_x += 0.003
+            
         cos_y, sin_y = math.cos(self.angle_y), math.sin(self.angle_y)
         cos_x, sin_x = math.cos(self.angle_x), math.sin(self.angle_x)
         projected = []
@@ -94,6 +103,10 @@ class MatrixPyramid3D:
         self.last_pinch_time = 0
         self.was_pinched_last_frame = False
         self.to_delete = False
+
+        # --- Variables pour la rotation manuelle (Poing) ---
+        self.is_rotating_manually = False
+        self.last_pinch_pos = (0, 0)
         
         # 4 Sommets d'un tétraèdre
         self.nodes = [
@@ -108,8 +121,10 @@ class MatrixPyramid3D:
         self.angle_y = 0.0
 
     def draw(self, img):
-        self.angle_y += 0.04
-        self.angle_x += 0.02
+        if not self.is_rotating_manually:
+            self.angle_y += 0.04
+            self.angle_x += 0.02
+            
         cos_y, sin_y = math.cos(self.angle_y), math.sin(self.angle_y)
         cos_x, sin_x = math.cos(self.angle_x), math.sin(self.angle_x)
         projected = []
@@ -197,6 +212,10 @@ class DetectionThread:
 DETECT_W, DETECT_H = 640, 360
 DISPLAY_W, DISPLAY_H = 1280, 720
 
+# Fonction utilitaire pour calculer les distances facilement
+def get_dist(p1, p2):
+    return math.hypot(p1[0] - p2[0], p1[1] - p2[1])
+
 def main():
     cam = CameraStream(width=DISPLAY_W, height=DISPLAY_H)
     det = DetectionThread()
@@ -233,15 +252,10 @@ def main():
         if len(hand_data) == 2:
             h1, h2 = hand_data[0], hand_data[1]
             
-            # NOUVEAU : On récupère les poignets (point 0)
             w1x, w1y = int(h1[0][0]*scale_x), int(h1[0][1]*scale_y)
             w2x, w2y = int(h2[0][0]*scale_x), int(h2[0][1]*scale_y)
             
-            # SÉCURITÉ : Les poignets doivent être éloignés d'au moins 100 pixels.
-            # Sinon, c'est la même main détectée deux fois !
-            if math.hypot(w1x-w2x, w1y-w2y) > 100:
-                
-                # Pouces (point 4) et Index (point 8)
+            if get_dist((w1x, w1y), (w2x, w2y)) > 100:
                 thumb1, thumb2 = h1[4], h2[4]
                 index1, index2 = h1[8], h2[8]
                 
@@ -250,22 +264,18 @@ def main():
                 i1x, i1y = int(index1[0]*scale_x), int(index1[1]*scale_y)
                 i2x, i2y = int(index2[0]*scale_x), int(index2[1]*scale_y)
 
-                # NOUVEAU : On calcule l'écartement des doigts d'une MÊME main
-                spread1 = math.hypot(t1x - i1x, t1y - i1y)
-                spread2 = math.hypot(t2x - i2x, t2y - i2y)
+                spread1 = get_dist((t1x, t1y), (i1x, i1y))
+                spread2 = get_dist((t2x, t2y), (i2x, i2y))
 
-                # SÉCURITÉ ANTI-PINCEMENT : Les doigts doivent être tendus (écartés de + de 50px)
                 if spread1 > 50 and spread2 > 50:
-
-                    # Si les pouces se touchent ET les index se touchent
-                    if math.hypot(t1x-t2x, t1y-t2y) < 60 and math.hypot(i1x-i2x, i1y-i2y) < 60:
+                    if get_dist((t1x, t1y), (t2x, t2y)) < 60 and get_dist((i1x, i1y), (i2x, i2y)) < 60:
                         if spawn_cooldown == 0:
                             cx = (t1x + t2x + i1x + i2x) // 4
                             cy = (t1y + t2y + i1y + i2y) // 4
                             shapes.append(MatrixPyramid3D(cx, cy, 80))
                             spawn_cooldown = 180
 
-        # --- RECHERCHE DES PINCEMENTS ---
+        # --- RECHERCHE DES PINCEMENTS ET DU POING ---
         active_pinches = []
         for hand in hand_data:
             tx, ty = hand[4]
@@ -274,58 +284,64 @@ def main():
             ix, iy = int(ix * scale_x), int(iy * scale_y)
             cx, cy = (tx + ix) // 2, (ty + iy) // 2
             
-            if math.hypot(tx - ix, ty - iy) < 35:
-                active_pinches.append((cx, cy))
+            if get_dist((tx, ty), (ix, iy)) < 35:
+                # Analyse du Poing : Les bouts des doigts restants sont-ils plus proches du poignet que leur base ?
+                wrist = hand[0]
+                folded_mid = get_dist(hand[12], wrist) < get_dist(hand[9], wrist)
+                folded_ring = get_dist(hand[16], wrist) < get_dist(hand[13], wrist)
+                folded_pinky = get_dist(hand[20], wrist) < get_dist(hand[17], wrist)
+                
+                # Le "poing" est confirmé si Majeur, Annulaire et Auriculaire sont repliés
+                is_fist = folded_mid and folded_ring and folded_pinky
+                
+                # On ajoute is_fist à notre détection !
+                active_pinches.append((cx, cy, is_fist))
                 cv2.circle(display, (cx, cy), 8, (0, 255, 0), -1)
 
         # Assigner les pincements aux formes
         for shape in shapes: shape.pinches = []
-        for px, py in active_pinches:
+        for px, py, is_fist in active_pinches:
             for shape in shapes:
-                if math.hypot(px - shape.x, py - shape.y) < shape.radius:
-                    shape.pinches.append((px, py))
+                if get_dist((px, py), (shape.x, shape.y)) < shape.radius:
+                    shape.pinches.append((px, py, is_fist))
                     break
 
-        # --- NOUVEAU : LOGIQUE DE SUPPRESSION (TRIPLE-CLIC) ---
+        # --- LOGIQUE DE SUPPRESSION (TRIPLE-CLIC) ---
         for shape in shapes:
             is_pinched_now = len(shape.pinches) > 0
             
-            # Si on vient de fermer les doigts sur la forme (nouveau clic)
             if is_pinched_now and not shape.was_pinched_last_frame:
-                # Si le délai entre le précédent clic et maintenant est inférieur à 0.75 seconde
                 if current_time - shape.last_pinch_time < 0.75:
                     shape.pinch_count += 1
                 else:
-                    # Sinon, c'est un clic tout neuf, on recommence à 1
                     shape.pinch_count = 1
                 
                 shape.last_pinch_time = current_time
-                
-                # S'il y a 3 clics consécutifs rapides, on marque pour suppression
                 if shape.pinch_count >= 3:
                     shape.to_delete = True
 
-            # On met à jour l'état du pincement pour la frame suivante
             shape.was_pinched_last_frame = is_pinched_now
 
-        # 🧹 Nettoyage : On recrée la liste en ignorant les formes marquées "à supprimer"
+        # Nettoyage
         shapes = [s for s in shapes if not s.to_delete]
-
 
         # --- 2. GESTE DYNAMIQUE : DESSINER UN CERCLE ---
         is_grabbing_something = any(len(s.pinches) > 0 for s in shapes)
         
         if len(active_pinches) == 1 and not is_grabbing_something:
-            drawing_path.append(active_pinches[0])
-            if len(drawing_path) > 1:
-                for i in range(1, len(drawing_path)):
-                    cv2.line(display, drawing_path[i-1], drawing_path[i], (255, 200, 0), 4)
+            px, py, is_fist = active_pinches[0]
+            # On ne dessine un cercle QUE si la main est ouverte (pas en poing)
+            if not is_fist:
+                drawing_path.append((px, py))
+                if len(drawing_path) > 1:
+                    for i in range(1, len(drawing_path)):
+                        cv2.line(display, drawing_path[i-1], drawing_path[i], (255, 200, 0), 4)
         else:
             if len(drawing_path) > 20: 
                 start_p = drawing_path[0]
                 end_p = drawing_path[-1]
                 
-                if math.hypot(start_p[0]-end_p[0], start_p[1]-end_p[1]) < 100:
+                if get_dist(start_p, end_p) < 100:
                     xs = [p[0] for p in drawing_path]
                     ys = [p[1] for p in drawing_path]
                     w = max(xs) - min(xs)
@@ -338,23 +354,48 @@ def main():
             
             drawing_path.clear()
 
-        # --- PHYSIQUE AVEC OFFSET (Zéro Saut) ---
+        # --- PHYSIQUE AVEC ROTATION AU POING ---
         for shape in shapes:
+            shape.is_rotating_manually = False
+            
             if len(shape.pinches) == 1:
-                p = shape.pinches[0]
+                px, py, is_fist = shape.pinches[0]
+                
                 if not shape.is_grabbed_single:
                     shape.is_grabbed_single = True
                     shape.is_two_handed = False
-                    shape.drag_offset = (shape.x - p[0], shape.y - p[1])
-                shape.x = p[0] + shape.drag_offset[0]
-                shape.y = p[1] + shape.drag_offset[1]
+                    shape.drag_offset = (shape.x - px, shape.y - py)
+                    shape.last_pinch_pos = (px, py)
+                
+                if is_fist:
+                    # ROTATION 3D : On gèle le déplacement et on tourne !
+                    shape.is_rotating_manually = True
+                    dx = px - shape.last_pinch_pos[0]
+                    dy = py - shape.last_pinch_pos[1]
+                    
+                    # Vitesse de rotation liée au mouvement de la main
+                    shape.angle_y += dx * 0.015
+                    shape.angle_x -= dy * 0.015 
+                    
+                    # On met à jour l'offset en temps réel pour que la forme ne saute pas 
+                    # lorsqu'on relâche le poing et qu'on repasse en mode Drag & Drop
+                    shape.drag_offset = (shape.x - px, shape.y - py)
+                else:
+                    # DRAG & DROP CLASSIQUE
+                    shape.x = px + shape.drag_offset[0]
+                    shape.y = py + shape.drag_offset[1]
+                
+                # Enregistrement de la position pour le frame suivant
+                shape.last_pinch_pos = (px, py)
                 
             elif len(shape.pinches) == 2:
                 shape.is_grabbed_single = False
-                p1, p2 = shape.pinches[0], shape.pinches[1]
-                current_center_x = (p1[0] + p2[0]) // 2
-                current_center_y = (p1[1] + p2[1]) // 2
-                current_pinch_dist = math.hypot(p1[0] - p2[0], p1[1] - p2[1])
+                p1x, p1y, fist1 = shape.pinches[0]
+                p2x, p2y, fist2 = shape.pinches[1]
+                
+                current_center_x = (p1x + p2x) // 2
+                current_center_y = (p1y + p2y) // 2
+                current_pinch_dist = get_dist((p1x, p1y), (p2x, p2y))
                 
                 if not shape.is_two_handed:
                     shape.is_two_handed = True
@@ -384,4 +425,27 @@ def main():
     cv2.destroyAllWindows()
 
 if __name__ == "__main__":
-    main()
+    print("\n" + "="*50)
+    print(" 🧠 SYSTÈME DE VISION IA - MENU PRINCIPAL")
+    print("="*50)
+    print("[1] 🔵 Shapes Drag & Drop")
+    print("[2] 🖱️ Virtual Mouse")
+    print("[3] ❌ Quitter")
+    print("="*50)
+
+    choix = input("\n👉 Choisis ton module (1, 2 ou 3) : ").strip()
+
+    if choix == "1":
+        print("\n🚀 Lancement du module Matrix 3D...\n")
+        main()
+        
+    elif choix == "2":
+        print("\n🚀 Lancement de la Souris Virtuelle...\n")
+        try:
+            subprocess.run([sys.executable, "virt_mouse.py"])
+        except Exception as e:
+            print(f"❌ Erreur lors du lancement de la souris virtuelle : {e}")
+            
+    else:
+        print("\nArrêt du système. À bientôt !")
+        sys.exit()

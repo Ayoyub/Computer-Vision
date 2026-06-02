@@ -18,8 +18,8 @@ CAM_W, CAM_H = 640, 360
 LISSAGE = 5
 prev_x, prev_y = 0, 0
 curr_x, curr_y = 0, 0
-
-cap = cv2.VideoCapture(1)
+camera = int(input('Entrez num de la caméra: '))
+cap = cv2.VideoCapture(camera)
 cap.set(3, 1280)
 cap.set(4, 720)
 
