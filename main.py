@@ -10,9 +10,9 @@ from hand_detect import hand_detect, release
 # --- Formes Interactives 3D ---
 class MatrixSphere3D:
     def __init__(self, x, y, radius):
-        self.x = x
-        self.y = y
-        self.radius = radius
+        self.x = float(x)
+        self.y = float(y)
+        self.radius = float(radius)
         self.color = (106, 50, 159)
         self.pinches = []
         self.is_two_handed = False
@@ -22,13 +22,11 @@ class MatrixSphere3D:
         self.is_grabbed_single = False
         self.drag_offset = (0, 0)
         
-        # --- Variables pour la suppression (Triple-clic) ---
         self.pinch_count = 0
         self.last_pinch_time = 0
         self.was_pinched_last_frame = False
         self.to_delete = False
 
-        # --- Variables pour la rotation manuelle (Poing) ---
         self.is_rotating_manually = False
         self.last_pinch_pos = (0, 0)
         
@@ -56,7 +54,6 @@ class MatrixSphere3D:
                 self.edges.append((current, next_i))
 
     def draw(self, img):
-        # La rotation auto s'arrête si on tourne à la main
         if not self.is_rotating_manually:
             self.angle_y += 0.003
             self.angle_x += 0.003
@@ -80,16 +77,15 @@ class MatrixSphere3D:
         for px, py in projected:
             cv2.circle(img, (px, py), 2, (255, 0, 255), -1, cv2.LINE_AA)
             
-        # Effet visuel du pincement (si on la touche, elle s'allume en vert)
         if len(self.pinches) > 0:
             cv2.circle(img, (int(self.x), int(self.y)), int(self.radius), (0, 255, 0), 1)
 
 class MatrixPyramid3D:
     def __init__(self, x, y, radius):
-        self.x = x
-        self.y = y
-        self.radius = radius
-        self.color = (0, 150, 255) # Orange/Or pour le triangle
+        self.x = float(x)
+        self.y = float(y)
+        self.radius = float(radius)
+        self.color = (0, 150, 255) 
         self.pinches = []
         self.is_two_handed = False
         self.initial_radius = radius
@@ -98,24 +94,20 @@ class MatrixPyramid3D:
         self.is_grabbed_single = False
         self.drag_offset = (0, 0)
         
-        # --- Variables pour la suppression (Triple-clic) ---
         self.pinch_count = 0
         self.last_pinch_time = 0
         self.was_pinched_last_frame = False
         self.to_delete = False
 
-        # --- Variables pour la rotation manuelle (Poing) ---
         self.is_rotating_manually = False
         self.last_pinch_pos = (0, 0)
         
-        # 4 Sommets d'un tétraèdre
         self.nodes = [
-            (0, -1, 0),                 # Haut
-            (-0.866, 0.5, -0.5),        # Bas Gauche
-            (0.866, 0.5, -0.5),         # Bas Droite
-            (0, 0.5, 1)                 # Avant
+            (0, -1, 0),                 
+            (-0.866, 0.5, -0.5),        
+            (0.866, 0.5, -0.5),         
+            (0, 0.5, 1)                 
         ]
-        # 6 Arêtes
         self.edges = [(0,1), (0,2), (0,3), (1,2), (2,3), (3,1)]
         self.angle_x = 0.0
         self.angle_y = 0.0
@@ -144,7 +136,6 @@ class MatrixPyramid3D:
         for px, py in projected:
             cv2.circle(img, (px, py), 4, (200, 200, 255), -1, cv2.LINE_AA)
             
-        # Effet visuel du pincement
         if len(self.pinches) > 0:
             cv2.circle(img, (int(self.x), int(self.y)), int(self.radius), self.color, 1)
 
@@ -208,11 +199,9 @@ class DetectionThread:
         self.running = False
         self.thread.join()
 
-# --- Résolution ---
 DETECT_W, DETECT_H = 640, 360
 DISPLAY_W, DISPLAY_H = 1280, 720
 
-# Fonction utilitaire pour calculer les distances facilement
 def get_dist(p1, p2):
     return math.hypot(p1[0] - p2[0], p1[1] - p2[1])
 
@@ -221,10 +210,11 @@ def main():
     det = DetectionThread()
 
     shapes = [] 
-    
-    # Variables pour la reconnaissance de gestes
     drawing_path = []
     spawn_cooldown = 0 
+    
+    # FACTEUR DE LISSAGE (Plus il est grand, plus la forme est lourde/élastique)
+    LISSAGE = 3.0 
 
     print("Caméra lancée — Échap pour quitter.")
     while cam.read() is None: time.sleep(0.01)
@@ -251,7 +241,6 @@ def main():
         # --- 1. GESTE STATIQUE : LE TRIANGLE ---
         if len(hand_data) == 2:
             h1, h2 = hand_data[0], hand_data[1]
-            
             w1x, w1y = int(h1[0][0]*scale_x), int(h1[0][1]*scale_y)
             w2x, w2y = int(h2[0][0]*scale_x), int(h2[0][1]*scale_y)
             
@@ -285,20 +274,16 @@ def main():
             cx, cy = (tx + ix) // 2, (ty + iy) // 2
             
             if get_dist((tx, ty), (ix, iy)) < 35:
-                # Analyse du Poing : Les bouts des doigts restants sont-ils plus proches du poignet que leur base ?
                 wrist = hand[0]
                 folded_mid = get_dist(hand[12], wrist) < get_dist(hand[9], wrist)
                 folded_ring = get_dist(hand[16], wrist) < get_dist(hand[13], wrist)
                 folded_pinky = get_dist(hand[20], wrist) < get_dist(hand[17], wrist)
                 
-                # Le "poing" est confirmé si Majeur, Annulaire et Auriculaire sont repliés
                 is_fist = folded_mid and folded_ring and folded_pinky
                 
-                # On ajoute is_fist à notre détection !
                 active_pinches.append((cx, cy, is_fist))
                 cv2.circle(display, (cx, cy), 8, (0, 255, 0), -1)
 
-        # Assigner les pincements aux formes
         for shape in shapes: shape.pinches = []
         for px, py, is_fist in active_pinches:
             for shape in shapes:
@@ -322,7 +307,6 @@ def main():
 
             shape.was_pinched_last_frame = is_pinched_now
 
-        # Nettoyage
         shapes = [s for s in shapes if not s.to_delete]
 
         # --- 2. GESTE DYNAMIQUE : DESSINER UN CERCLE ---
@@ -330,7 +314,6 @@ def main():
         
         if len(active_pinches) == 1 and not is_grabbing_something:
             px, py, is_fist = active_pinches[0]
-            # On ne dessine un cercle QUE si la main est ouverte (pas en poing)
             if not is_fist:
                 drawing_path.append((px, py))
                 if len(drawing_path) > 1:
@@ -354,7 +337,7 @@ def main():
             
             drawing_path.clear()
 
-        # --- PHYSIQUE AVEC ROTATION AU POING ---
+        # --- PHYSIQUE AVEC LISSAGE ET ROTATION ---
         for shape in shapes:
             shape.is_rotating_manually = False
             
@@ -368,24 +351,23 @@ def main():
                     shape.last_pinch_pos = (px, py)
                 
                 if is_fist:
-                    # ROTATION 3D : On gèle le déplacement et on tourne !
+                    # ROTATION 3D
                     shape.is_rotating_manually = True
                     dx = px - shape.last_pinch_pos[0]
                     dy = py - shape.last_pinch_pos[1]
                     
-                    # Vitesse de rotation liée au mouvement de la main
                     shape.angle_y += dx * 0.015
                     shape.angle_x -= dy * 0.015 
                     
-                    # On met à jour l'offset en temps réel pour que la forme ne saute pas 
-                    # lorsqu'on relâche le poing et qu'on repasse en mode Drag & Drop
                     shape.drag_offset = (shape.x - px, shape.y - py)
                 else:
-                    # DRAG & DROP CLASSIQUE
-                    shape.x = px + shape.drag_offset[0]
-                    shape.y = py + shape.drag_offset[1]
+                    # DÉPLACEMENT AVEC LISSAGE
+                    cible_x = px + shape.drag_offset[0]
+                    cible_y = py + shape.drag_offset[1]
+                    
+                    shape.x += (cible_x - shape.x) / LISSAGE
+                    shape.y += (cible_y - shape.y) / LISSAGE
                 
-                # Enregistrement de la position pour le frame suivant
                 shape.last_pinch_pos = (px, py)
                 
             elif len(shape.pinches) == 2:
@@ -405,10 +387,19 @@ def main():
                 else:
                     if shape.initial_pinch_dist > 0:
                         scale_factor = current_pinch_dist / shape.initial_pinch_dist
-                        new_radius = int(shape.initial_radius * scale_factor)
-                        shape.radius = max(30, min(400, new_radius))
-                shape.x = current_center_x + shape.two_hand_offset[0]
-                shape.y = current_center_y + shape.two_hand_offset[1]
+                        cible_radius = int(shape.initial_radius * scale_factor)
+                        cible_radius = max(30, min(400, cible_radius))
+                        
+                        # REDIMENSIONNEMENT AVEC LISSAGE (Élastique)
+                        shape.radius += (cible_radius - shape.radius) / LISSAGE
+                
+                # DÉPLACEMENT À 2 MAINS AVEC LISSAGE
+                cible_x = current_center_x + shape.two_hand_offset[0]
+                cible_y = current_center_y + shape.two_hand_offset[1]
+                
+                shape.x += (cible_x - shape.x) / LISSAGE
+                shape.y += (cible_y - shape.y) / LISSAGE
+                
             else:
                 shape.is_grabbed_single = False
                 shape.is_two_handed = False
