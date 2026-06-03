@@ -2,37 +2,13 @@ import cv2
 import math
 import pyautogui
 from hand_detect import hand_detect, release
+from config import CAM, HAND, MOUSE
 
-# ╔══════════════════════════════════════════════════════════════════════════════╗
-# ║                        PARAMÈTRES — MODIFIE ICI                            ║
-# ╚══════════════════════════════════════════════════════════════════════════════╝
-
-# ── Lissage du curseur ──────────────────────────────────────────────────────────
-# Valeur entre 0.0 et 1.0
-# 0.05 = très fluide mais lent    |    0.5 = réactif mais saccadé
-# Recommandé : entre 0.15 et 0.30
-ALPHA_LISSAGE = 0.20
-
-# ── Seuil de pincement (clic gauche) ────────────────────────────────────────────
-# Distance en pixels entre le POUCE (4) et l'INDEX (8) sur le frame réduit (640×360)
-# Plus petit = il faut pincer fort    |    Plus grand = clic trop facile
-# Recommandé : entre 18 et 30
-SEUIL_PINCEMENT = 22
-
-# ── Seuil "main fermée" (poing) ─────────────────────────────────────────────────
-# Quand le poing est fermé, les 4 bouts de doigts remontent vers la paume.
-# On mesure la distance moyenne entre chaque bout de doigt et le poignet (point 0).
-# En dessous de ce seuil = main fermée → aucune action.
-# Recommandé : entre 60 et 90 (ajuste si faux positifs)
-SEUIL_POING = 75
-
-# ── Résolution de détection ──────────────────────────────────────────────────────
-# Doit correspondre au resize dans la boucle principale
-CAM_W, CAM_H = 640, 360
-
-# ╔══════════════════════════════════════════════════════════════════════════════╗
-# ║                        FIN DES PARAMÈTRES                                  ║
-# ╚══════════════════════════════════════════════════════════════════════════════╝
+# Paramètres lus depuis config.py — modifie les valeurs là-bas
+ALPHA_LISSAGE   = MOUSE['alpha']
+SEUIL_PINCEMENT = HAND['seuil_pincement']
+SEUIL_POING     = HAND['seuil_poing']
+CAM_W, CAM_H    = CAM['detect_w'], CAM['detect_h']
 
 # Sécurité pyautogui : coin haut-gauche de l'écran = tout stoppe
 pyautogui.FAILSAFE = True
@@ -131,15 +107,15 @@ def draw_hud(display, points, poing, pincement):
     cv2.putText(display, etat, (bx, by), font, scale, (200, 200, 200), 1, cv2.LINE_AA)
 
 
-# ── Démarrage caméra ────────────────────────────────────────────────────────────
-camera = int(input("Numéro de caméra (Entrée = 0) : ") or 0)
-cap = cv2.VideoCapture(camera, cv2.CAP_DSHOW)
-cap.set(cv2.CAP_PROP_FRAME_WIDTH,  1280)
-cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)
-cap.set(cv2.CAP_PROP_BUFFERSIZE,   1)
+# ── Démarrage caméra — source définie dans config.py : CAM['source'] ────────────
+cap = cv2.VideoCapture(CAM['source'], cv2.CAP_DSHOW)
+cap.set(cv2.CAP_PROP_FRAME_WIDTH,  CAM['display_w'])
+cap.set(cv2.CAP_PROP_FRAME_HEIGHT, CAM['display_h'])
+cap.set(cv2.CAP_PROP_BUFFERSIZE,   CAM['buffer_size'])
 
 print(f"Écran : {ECRAN_W}×{ECRAN_H}  |  Échap pour quitter")
 print(f"Seuil pincement : {SEUIL_PINCEMENT}px  |  Seuil poing : {SEUIL_POING}px")
+print(f"Caméra source : {CAM['source']}  (modifiable dans config.py)")
 
 while True:
     ok, frame = cap.read()
@@ -154,8 +130,8 @@ while True:
     display, hand_data = hand_detect(small)
 
     if hand_data:
-        points  = hand_data[0]['points']
-        gestes  = hand_data[0]['gestes']
+        points = hand_data[0]   # on utilise la première main détectée
+
         poing     = est_poing_ferme(points)
         pincement = est_pincement(points)
 
@@ -186,7 +162,7 @@ while True:
         draw_hud(display, points, poing, pincement)
 
     # Upscale pour l'affichage plein écran
-    display = cv2.resize(display, (1280, 720))
+    display = cv2.resize(display, (CAM['display_w'], CAM['display_h']))
     cv2.imshow("Souris Virtuelle", display)
 
     if cv2.waitKey(1) == 27:

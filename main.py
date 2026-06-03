@@ -6,11 +6,8 @@ import time
 import math
 from face_detect import face_detect
 from hand_detect import hand_detect, release
-from config import CAM, SHAPES, PHYSICS
+import os
 
-DETECT_W, DETECT_H   = CAM['detect_w'], CAM['detect_h']
-DISPLAY_W, DISPLAY_H = CAM['display_w'], CAM['display_h']
-LISSAGE              = PHYSICS['lissage']
 
 # --- Formes Interactives 3D ---
 class MatrixSphere3D:
@@ -228,15 +225,17 @@ class DetectionThread:
         self.running = False
         self.thread.join()
 
-DETECT_W, DETECT_H = 640, 360
-DISPLAY_W, DISPLAY_H = 1280, 720
+from config import CAM
+
+DETECT_W,  DETECT_H  = CAM['detect_w'],  CAM['detect_h']
+DISPLAY_W, DISPLAY_H = CAM['display_w'], CAM['display_h']
 
 # Fonction utilitaire pour calculer les distances entre 2 points
 def get_dist(p1, p2):
     return math.hypot(p1[0] - p2[0], p1[1] - p2[1])
 
 def main():
-    cam = CameraStream(width=DISPLAY_W, height=DISPLAY_H)
+    cam = CameraStream(src=CAM['source'], width=DISPLAY_W, height=DISPLAY_H)
     det = DetectionThread()
 
     shapes = [] 
@@ -271,7 +270,7 @@ def main():
 
         # --- 1. GESTE STATIQUE : LE TRIANGLE (ILLUMINATI) ---
         if len(hand_data) == 2:
-            h1, h2 = hand_data[0], hand_data[1]
+            h1, h2 = hand_data[0]['points'], hand_data[1]['points']
             w1x, w1y = int(h1[0][0]*scale_x), int(h1[0][1]*scale_y)
             w2x, w2y = int(h2[0][0]*scale_x), int(h2[0][1]*scale_y)
             
@@ -301,8 +300,9 @@ def main():
         # --- RECHERCHE DES PINCEMENTS ET DU POING ---
         active_pinches = []
         for hand in hand_data:
-            tx, ty = hand[4] # Pouce
-            ix, iy = hand[8] # Index
+            pts = hand['points']
+            tx, ty = pts[4] # Pouce
+            ix, iy = pts[8] # Index
             tx, ty = int(tx * scale_x), int(ty * scale_y)
             ix, iy = int(ix * scale_x), int(iy * scale_y)
             cx, cy = (tx + ix) // 2, (ty + iy) // 2
@@ -310,10 +310,10 @@ def main():
             # Si le pouce et l'index sont proches (Pincement)
             if get_dist((tx, ty), (ix, iy)) < 35:
                 # Analyse du Poing : Majeur, Annulaire et Auriculaire sont-ils repliés vers le poignet ?
-                wrist = hand[0]
-                folded_mid = get_dist(hand[12], wrist) < get_dist(hand[9], wrist)
-                folded_ring = get_dist(hand[16], wrist) < get_dist(hand[13], wrist)
-                folded_pinky = get_dist(hand[20], wrist) < get_dist(hand[17], wrist)
+                wrist = pts[0]
+                folded_mid = get_dist(pts[12], wrist) < get_dist(pts[9], wrist)
+                folded_ring = get_dist(pts[16], wrist) < get_dist(pts[13], wrist)
+                folded_pinky = get_dist(pts[20], wrist) < get_dist(pts[17], wrist)
                 
                 is_fist = folded_mid and folded_ring and folded_pinky
                 
@@ -511,10 +511,11 @@ if __name__ == "__main__":
         main()
         
     elif choix == "2":
+        subprocess.run([sys.executable, "test_cam.py"], cwd=script_dir)
         print("\n🚀 Lancement de la Souris Virtuelle...\n")
         try:
-            # sys.executable garantit d'utiliser le bon environnement Python
-            subprocess.run([sys.executable, "virt_mouse.py"])
+            script_dir = os.path.dirname(os.path.abspath(__file__))
+            subprocess.run([sys.executable, "virt_mouse.py"], cwd=script_dir)
         except Exception as e:
             print(f"❌ Erreur lors du lancement de la souris virtuelle : {e}")
             
