@@ -137,7 +137,7 @@ def _draw_liquid_hand(img, points, gestes):
         cv2.line(img, (ix - 8, iy - 8), (ix + 8, iy + 8), (140, 140, 140), 1, cv2.LINE_AA)
         cv2.line(img, (ix + 8, iy - 8), (ix - 8, iy + 8), (140, 140, 140), 1, cv2.LINE_AA)
 
-def hand_detect(img):
+def hand_detect_OLD(img):
     h, w = img.shape[:2]
     img_rgb  = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
     mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=img_rgb)
@@ -177,6 +177,51 @@ def hand_detect(img):
             _draw_liquid_hand(img, points, gestes)
 
     return img, hand_data
+
+# ── Variables d'état globales pour la mémoire inter-frames ──────────────────
+_pinch_states = {}
+_kalman_filters = {}
+
+def hand_detect(img):
+    h, w = img.shape[:2]
+    img_rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+    mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=img_rgb)
+    timestamp_ms = int(time.time() * 1000)
+    result = landmarker.detect_for_video(mp_image, timestamp_ms)
+    hand_data = []
+    
+    # Reset les filtres si aucune main n'est présente à l'écran
+    if not result.hand_landmarks:
+        _pinch_states.clear()
+        _kalman_filters.clear()
+    
+    if result.hand_landmarks:
+        for idx, raw_landmarks in enumerate(result.hand_landmarks):
+            if idx not in _kalman_filters:
+                _kalman_filters[idx] = {i: KalmanCursor() for i in range(21)}
+            
+            points = [(int(lm.x * w), int(lm.y * h)) for lm in raw_landmarks]
+            
+            # ── APPLICATION DU FILTRE DE KALMAN SUR TOUS LES POINTS ──
+            lissed_points = []
+            for i, (px, py) in enumerate(points):
+                kx, ky = _kalman_filters[idx][i].update(px, py)
+                lissed_points.append((kx, ky))
+            
+            gestes = {
+                'poing': est_poing_ferme(lissed_points),
+                'pincement': est_pincement(lissed_points, idx),
+            }
+            rot = rotation_3d(raw_landmarks)
+            hand_data.append({
+                'points': lissed_points,
+                'gestes': gestes,
+                'rotation': rot,
+            })
+            _draw_liquid_hand(img, lissed_points, gestes)
+    return img, hand_data
+
+
 
 def release():
     landmarker.close()

@@ -27,7 +27,7 @@ class KalmanCursor:
             [0, 1, 0, 0],
             [0, 0, 5, 0],
             [0, 0, 0, 5]
-        ], np.float32) * 5e-2
+        ], np.float32) * 0.00005
 
         # Bruit de mesure. Augmenter si MediaPipe tremble trop
         self.kf.measurementNoiseCov = np.eye(2, dtype=np.float32) * 5e-2

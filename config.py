@@ -21,7 +21,7 @@ CAM = {
     # 0 = webcam intégrée (défaut)
     # 1, 2, ... = caméras externes (USB, capture card, etc.)
     # Tu peux aussi mettre un chemin de fichier vidéo : 'video.mp4'
-    'source': 2,
+    'source': 1,
 
     # Résolution d'affichage (fenêtre visible)
     'display_w': 1280,

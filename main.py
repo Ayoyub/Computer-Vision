@@ -12,6 +12,7 @@ import os
 # --- Formes Interactives 3D ---
 class MatrixSphere3D:
     def __init__(self, x, y, radius):
+        self.locked_hand_id = None  # ID de la main qui contrôle cette forme
         self.x = float(x)
         self.y = float(y)
         self.radius = float(radius)
@@ -68,7 +69,7 @@ class MatrixSphere3D:
 
     def draw(self, img):
         # La rotation auto s'arrête si on tourne la forme à la main avec le poing
-        if not self.is_rotating_manually:
+        if self.locked_hand_id is None:
             self.angle_y += 0.003
             self.angle_x += 0.003
             
@@ -101,6 +102,7 @@ class MatrixSphere3D:
 
 class MatrixPyramid3D:
     def __init__(self, x, y, radius):
+        self.locked_hand_id = None  # ID de la main qui contrôle cette forme
         self.x = float(x)
         self.y = float(y)
         self.radius = float(radius)
@@ -138,7 +140,7 @@ class MatrixPyramid3D:
         self.angle_y = 0.0
 
     def draw(self, img):
-        if not self.is_rotating_manually:
+        if self.locked_hand_id is None:
             self.angle_y += 0.04
             self.angle_x += 0.02
             
@@ -209,7 +211,7 @@ class DetectionThread:
             if frame is None:
                 time.sleep(0.001)
                 continue
-            frame, _ = face_detect(frame)
+            #frame, _ = face_detect(frame)
             frame, hand_data = hand_detect(frame)
             with self.lock_out:
                 self.output_frame, self.output_data = frame, hand_data
@@ -299,7 +301,7 @@ def main():
 
         # --- RECHERCHE DES PINCEMENTS ET DU POING ---
         active_pinches = []
-        for hand in hand_data:
+        for hand_idx, hand in enumerate(hand_data):  # <-- Ajout de hand_idx
             pts = hand['points']
             tx, ty = pts[4] # Pouce
             ix, iy = pts[8] # Index
@@ -314,19 +316,62 @@ def main():
                 folded_mid = get_dist(pts[12], wrist) < get_dist(pts[9], wrist)
                 folded_ring = get_dist(pts[16], wrist) < get_dist(pts[13], wrist)
                 folded_pinky = get_dist(pts[20], wrist) < get_dist(pts[17], wrist)
-                
                 is_fist = folded_mid and folded_ring and folded_pinky
-                
-                active_pinches.append((cx, cy, is_fist))
+                active_pinches.append((cx, cy, is_fist, hand_idx))  # <-- Ajout de hand_idx
                 cv2.circle(display, (cx, cy), 8, (0, 255, 0), -1)
 
         # Assigner les pincements aux formes proches
-        for shape in shapes: shape.pinches = []
-        for px, py, is_fist in active_pinches:
+        for shape in shapes: 
+            shape.pinches = []
+
+            if shape.locked_hand_id is not None:
+                # Vérifier si la main existe toujours
+                if shape.locked_hand_id < len(hand_data):
+                    hand = hand_data[shape.locked_hand_id]
+                    pts = hand['points']
+                    tx, ty = pts[4]  # Pouce
+                    ix, iy = pts[8]  # Index
+                    tx, ty = int(tx * scale_x), int(ty * scale_y)
+                    ix, iy = int(ix * scale_x), int(iy * scale_y)
+                    cx, cy = (tx + ix) // 2, (ty + iy) // 2
+
+
+
+
+                    # Vérifier si la main est TOUJOURS en poing
+                    wrist = pts[0]
+                    folded_mid = get_dist(pts[12], wrist) < get_dist(pts[9], wrist)
+                    folded_ring = get_dist(pts[16], wrist) < get_dist(pts[13], wrist)
+                    folded_pinky = get_dist(pts[20], wrist) < get_dist(pts[17], wrist)
+                    is_fist = folded_mid and folded_ring and folded_pinky
+
+                    if is_fist:
+                        # ✅ Main toujours en poing → maintenir le verrouillage
+                        shape.pinches.append((cx, cy, is_fist))
+                    else:
+                        # ❌ Main ouverte → libérer la forme
+                        shape.locked_hand_id = None
+                else:
+                    # Main disparue (plus détectée) → libérer
+                    shape.locked_hand_id = None
+
+# 2. Associer les nouveaux pincements aux formes
+        for (px, py, is_fist, hand_idx) in active_pinches:
             for shape in shapes:
+                # Si cette forme est déjà verrouillée par CETTE main, on passe (déjà géré juste au-dessus)
+                if shape.locked_hand_id == hand_idx:
+                    continue
+                
+                # Si le doigt est à l'intérieur de la forme
                 if get_dist((px, py), (shape.x, shape.y)) < shape.radius:
                     shape.pinches.append((px, py, is_fist))
+                    
+                    if is_fist:
+                        # 🔒 Verrouiller la forme pour cette main
+                        shape.locked_hand_id = hand_idx
+                    
                     break # On attrape une seule forme par main
+                
 
         # --- LOGIQUE DE SUPPRESSION (TRIPLE-CLIC) ---
         for shape in shapes:
@@ -352,7 +397,7 @@ def main():
         
         # Si on pince dans le vide (sans poing)
         if len(active_pinches) == 1 and not is_grabbing_something:
-            px, py, is_fist = active_pinches[0]
+            px, py, is_fist, _ = active_pinches[0]
             if not is_fist:
                 drawing_path.append((px, py))
                 if len(drawing_path) > 1:
