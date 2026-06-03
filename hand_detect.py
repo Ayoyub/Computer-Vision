@@ -1,6 +1,5 @@
 import cv2
 import mediapipe as mp
-import numpy as np
 from mediapipe.tasks import python
 from mediapipe.tasks.python import vision
 import urllib.request
@@ -38,51 +37,32 @@ _HAND_CONNECTIONS = [
     (5, 9), (9, 13), (13, 17),
 ]
 
-# Liquid glass palette (BGR)
-HAND_COLORS = [
-    (255, 220, 180),   # main gauche — pêche clair
-    (180, 255, 220),   # main droite — menthe clair
-]
-JOINT_COLORS = [
-    (200, 160, 255),   # articulations main gauche — lavande
-    (255, 200, 100),   # articulations main droite — ambre
-]
-CONN_COLORS = [
-    (255, 200, 150),
-    (150, 255, 200),
-]
-FINGERTIP_IDS = {4, 8, 12, 16, 20}
+_FINGERTIP_IDS = {4, 8, 12, 16, 20}
 
 
 def _draw_liquid_hand(img, points):
-    h, w = img.shape[:2]
- 
-    # ── Connexions ──
+    # ── Connexions : traits fins gris semi-transparents ──
     overlay = img.copy()
     for s, e in _HAND_CONNECTIONS:
-        p1, p2 = points[s], points[e]
-        # trait fin, gris très clair
-        cv2.line(overlay, p1, p2, (210, 210, 210), 1, cv2.LINE_AA)
+        cv2.line(overlay, points[s], points[e], (210, 210, 210), 1, cv2.LINE_AA)
     cv2.addWeighted(overlay, 0.45, img, 0.55, 0, img)
- 
-        # ── Joints ──
+
+    # ── Joints ──
     for i, (px, py) in enumerate(points):
-        tip = i in FINGERTIP_IDS
+        tip = i in _FINGERTIP_IDS
         r   = 5 if tip else 3
- 
-        # Halo diffus (3 passes d'alpha de plus en plus faibles)
+
+        # Halo diffus (3 passes d'alpha décroissant)
         for halo_r, alpha in [(r + 6, 0.06), (r + 3, 0.10), (r + 1, 0.14)]:
             ov = img.copy()
             cv2.circle(ov, (px, py), halo_r, (240, 240, 240), -1)
             cv2.addWeighted(ov, alpha, img, 1 - alpha, 0, img)
- 
-        # Cercle sombre (fond du joint)
+
+        # Fond sombre
         cv2.circle(img, (px, py), r, (30, 30, 30), -1, cv2.LINE_AA)
- 
-        # Contour gris nacré
+        # Contour nacré
         cv2.circle(img, (px, py), r, (180, 180, 180), 1, cv2.LINE_AA)
- 
-        # Éclat blanc central
+        # Éclat blanc décalé (effet verre)
         cv2.circle(img, (px - 1, py - 1), max(1, r - 2), (255, 255, 255), -1, cv2.LINE_AA)
 
 
@@ -96,7 +76,7 @@ def hand_detect(img):
     hand_data = []
 
     if result.hand_landmarks:
-        for hand_idx, hand_landmarks in enumerate(result.hand_landmarks):
+        for hand_landmarks in result.hand_landmarks:
             points = [(int(lm.x * w), int(lm.y * h)) for lm in hand_landmarks]
             hand_data.append(points)
             _draw_liquid_hand(img, points)
