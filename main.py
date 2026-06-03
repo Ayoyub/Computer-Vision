@@ -6,6 +6,11 @@ import time
 import math
 from face_detect import face_detect
 from hand_detect import hand_detect, release
+from config import CAM, SHAPES, PHYSICS
+
+DETECT_W, DETECT_H   = CAM['detect_w'], CAM['detect_h']
+DISPLAY_W, DISPLAY_H = CAM['display_w'], CAM['display_h']
+LISSAGE              = PHYSICS['lissage']
 
 # --- Formes Interactives 3D ---
 class MatrixSphere3D:
@@ -166,7 +171,7 @@ class MatrixPyramid3D:
 
 # --- Threads Caméra et Détection ---
 class CameraStream:
-    def __init__(self, src=1, width=1280, height=720):
+    def __init__(self, src=0, width=1280, height=720):
         self.cap = cv2.VideoCapture(src)
         self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, width)
         self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, height)

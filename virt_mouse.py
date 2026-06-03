@@ -154,8 +154,8 @@ while True:
     display, hand_data = hand_detect(small)
 
     if hand_data:
-        points = hand_data[0]   # on utilise la première main détectée
-
+        points  = hand_data[0]['points']
+        gestes  = hand_data[0]['gestes']
         poing     = est_poing_ferme(points)
         pincement = est_pincement(points)
 

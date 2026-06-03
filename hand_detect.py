@@ -6,6 +6,7 @@ from mediapipe.tasks.python import vision
 import urllib.request
 import os
 import time
+from config import HAND, DETECTION
 
 # ╔══════════════════════════════════════════════════════════════════════════════╗
 # ║  HAND DETECT — détection + rendu liquid glass                              ║
@@ -26,6 +27,10 @@ MODEL_URL  = (
     "https://storage.googleapis.com/mediapipe-models/"
     "hand_landmarker/hand_landmarker/float16/latest/hand_landmarker.task"
 )
+
+SEUIL_POING     = HAND['seuil_poing']
+SEUIL_PINCEMENT = HAND['seuil_pincement']
+MODEL_PATH      = DETECTION['model_path']
 
 def _ensure_model():
     if not os.path.exists(MODEL_PATH):
