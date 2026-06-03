@@ -91,37 +91,32 @@ def _apply_kalman(hand_idx, raw_points):
 # ── Détection de gestes ──────────────────────────────────────────────────────────
 
 def est_poing_ferme(points):
+    """ Main fermée si tous les bouts de doigts (y compris le pouce) sont proches du poignet (distance < SEUIL_POING).
+    La détection est plus robuste en vérifiant que chaque doigt est individuellement proche du poignet.
     """
-    Main fermée si la distance moyenne des 4 bouts de doigts au poignet
-    est inférieure à SEUIL_POING. Le pouce est exclu (reste visible poing fermé).
-    """
-    poignet  = points[0]
-    bouts    = [points[i] for i in [8, 12, 16, 20]]
-    dist_moy = sum(math.hypot(b[0] - poignet[0], b[1] - poignet[1]) for b in bouts) / 4
-    return dist_moy < SEUIL_POING
+    poignet = points[0]
+    bouts = [points[i] for i in [4, 8, 12, 16, 20]]  # Inclure le pouce (4)
+    # Vérifier que chaque bout de doigt est proche du poignet
+    for b in bouts:
+        dist = math.hypot(b[0] - poignet[0], b[1] - poignet[1])
+        if dist > SEUIL_POING:
+            return False
+    return True
 
 
 def est_pincement(points, hand_idx):
+    """ Pincement pouce (4) + index (8) avec hystérésis :
+    - Se déclenche quand dist < SEUIL_PINCEMENT_ON (22px)
+    - Se relâche quand dist > SEUIL_PINCEMENT_OFF (32px)
     """
-    Pincement pouce (4) + index (8) avec hystérésis :
-      - Se déclenche quand dist < SEUIL_PINCEMENT_ON  (22px)
-      - Se relâche quand  dist > SEUIL_PINCEMENT_OFF  (32px)
-    Bloqué si poing détecté.
-    """
-    if est_poing_ferme(points):
-        _pinch_states[hand_idx] = False
-        return False
-
     tx, ty = points[4]
     ix, iy = points[8]
-    dist   = math.hypot(tx - ix, ty - iy)
-
+    dist = math.hypot(tx - ix, ty - iy)
     etat = _pinch_states.get(hand_idx, False)
     if not etat and dist < SEUIL_PINCEMENT_ON:
         _pinch_states[hand_idx] = True
     elif etat and dist > SEUIL_PINCEMENT_OFF:
         _pinch_states[hand_idx] = False
-
     return _pinch_states.get(hand_idx, False)
 
 

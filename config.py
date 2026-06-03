@@ -45,7 +45,7 @@ CAM = {
 DETECTION = {
     # Nombre maximum de mains détectées simultanément
     # 1 = plus rapide    |    2 = nécessaire pour le zoom et la pyramide
-    'num_hands': 4,
+    'num_hands': 2,
 
     # Chemin local du modèle MediaPipe (téléchargé automatiquement si absent)
     'model_path': 'hand_landmarker.task',
@@ -62,11 +62,11 @@ HAND = {
     # Mesuré sur le frame de DÉTECTION (640×360), pas sur l'affichage.
     # ↑ Augmente si le poing n'est pas détecté assez tôt
     # ↓ Diminue si la main ouverte est détectée à tort comme poing
-    'seuil_poing': 75,
+    'seuil_poing': 65,
 
     # ── Hystérésis Pincement ────────────────────────────────────────────────────
-    'seuil_pincement_on': 22,   # Distance pour DÉCLENCHER le clic
-    'seuil_pincement_off': 32,  # Distance pour RELÂCHER le clic
+    'seuil_pincement_on': 15,   # Distance pour DÉCLENCHER le clic
+    'seuil_pincement_off': 20,  # Distance pour RELÂCHER le clic
 
     # ── Seuil pincement (main.py / shapes) ──────────────────────────────────────
     # Même concept mais utilisé dans main.py pour interagir avec les formes 3D.

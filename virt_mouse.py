@@ -38,7 +38,7 @@ def draw_hud(display, points, poing, pincement):
     cv2.putText(display, etat, (bx, by), font, scale, (200, 200, 200), 1, cv2.LINE_AA)
 
 
-cap = cv2.VideoCapture(CAM['source'], cv2.CAP_DSHOW)
+cap = cv2.VideoCapture(CAM['source'])
 cap.set(cv2.CAP_PROP_FRAME_WIDTH,  CAM['display_w'])
 cap.set(cv2.CAP_PROP_FRAME_HEIGHT, CAM['display_h'])
 cap.set(cv2.CAP_PROP_BUFFERSIZE,   CAM['buffer_size'])
