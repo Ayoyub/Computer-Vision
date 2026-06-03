@@ -511,7 +511,6 @@ if __name__ == "__main__":
         main()
         
     elif choix == "2":
-        subprocess.run([sys.executable, "test_cam.py"], cwd=script_dir)
         print("\n🚀 Lancement de la Souris Virtuelle...\n")
         try:
             script_dir = os.path.dirname(os.path.abspath(__file__))

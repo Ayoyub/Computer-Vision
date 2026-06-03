@@ -64,13 +64,9 @@ HAND = {
     # ↓ Diminue si la main ouverte est détectée à tort comme poing
     'seuil_poing': 75,
 
-    # ── Seuil pincement ─────────────────────────────────────────────────────────
-    # Distance (pixels) entre le pouce (4) et l'index (8).
-    # En dessous = pincement détecté → clic / interaction.
-    # Mesuré sur le frame de DÉTECTION (640×360).
-    # ↑ Augmente si le pincement est trop difficile à déclencher
-    # ↓ Diminue si le pincement se déclenche sans le vouloir
-    'seuil_pincement': 22,
+    # ── Hystérésis Pincement ────────────────────────────────────────────────────
+    'seuil_pincement_on': 22,   # Distance pour DÉCLENCHER le clic
+    'seuil_pincement_off': 32,  # Distance pour RELÂCHER le clic
 
     # ── Seuil pincement (main.py / shapes) ──────────────────────────────────────
     # Même concept mais utilisé dans main.py pour interagir avec les formes 3D.
