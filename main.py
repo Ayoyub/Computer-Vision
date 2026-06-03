@@ -424,6 +424,8 @@ def main():
                     action_triggered = MENU_OPTIONS[hovered_idx][0]
                     menu_phase = 0
                     hovered_idx = -1
+                    shapes_active = False  # Désactive le mode Shapes si une action est déclenchée via le menu
+                draw_radial_menu(display, menu_cx, menu_cy, hovered_idx, confirm_progress)
             else:
                 # Main perdue → fermeture du menu
                 draw_radial_menu(display, menu_cx, menu_cy, -1, 0)
