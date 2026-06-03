@@ -546,10 +546,11 @@ if __name__ == "__main__":
     print("="*50)
     print("[1] 🔵 Shapes Drag & Drop")
     print("[2] 🖱️ Virtual Mouse")
-    print("[3] ❌ Quitter")
+    print("[3] 🎲 Scène 3D (contrôle par la main)")
+    print("[4] ❌ Quitter")
     print("="*50)
 
-    choix = input("\n👉 Choisis ton module (1, 2 ou 3) : ").strip()
+    choix = input("\n👉 Choisis ton module (1, 2, 3 ou 4) : ").strip()
 
     if choix == "1":
         print("\n🚀 Lancement du module Matrix 3D...\n")
@@ -562,7 +563,15 @@ if __name__ == "__main__":
             subprocess.run([sys.executable, "virt_mouse.py"], cwd=script_dir)
         except Exception as e:
             print(f"❌ Erreur lors du lancement de la souris virtuelle : {e}")
-            
+
+    elif choix == "3":
+        print("\n🚀 Lancement de la Scène 3D...\n")
+        try:
+            from scene_3d import run as run_scene
+            run_scene()
+        except Exception as e:
+            print(f"❌ Erreur lors du lancement de la scène 3D : {e}")
+
     else:
         print("\nArrêt du système.")
         sys.exit()

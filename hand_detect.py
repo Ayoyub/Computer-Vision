@@ -1,15 +1,14 @@
 # ╔══════════════════════════════════════════════════════════════════════════════╗
-# ║  HAND DETECT — détection + rendu liquid glass                              ║
+# ║  HAND DETECT — détection + Kalman 21 points + rendu liquid glass           ║
 # ║                                                                            ║
 # ║  LANDMARKS MÉDIAPIPE (21 points numérotés sur la main) :                  ║
-# ║                                                                            ║
 # ║   0 = poignet                                                              ║
 # ║   1-4  = pouce       (4  = bout)                                          ║
 # ║   5-8  = index       (8  = bout)  ← curseur souris                        ║
 # ║   9-12 = majeur      (12 = bout)                                          ║
 # ║   13-16= annulaire   (16 = bout)                                          ║
 # ║   17-20= auriculaire (20 = bout)                                          ║
-# ╚══════════════════════════════════════════════════════════════════════════════╝import cv2
+# ╚══════════════════════════════════════════════════════════════════════════════╝
 import cv2
 import math
 import mediapipe as mp
@@ -54,52 +53,99 @@ _HAND_CONNECTIONS = [
 ]
 _FINGERTIP_IDS = {4, 8, 12, 16, 20}
 
-# ── Variables d'état globales pour la mémoire inter-frames ──────────────────
-_pinch_states = {}
-_kalman_filters = {}
+# ── État inter-frames ────────────────────────────────────────────────────────────
+_pinch_states   = {}   # hystérésis pincement par main
+
+# Pool de filtres Kalman : dict[hand_idx] → liste de 21 KalmanCursor
+# Un KalmanCursor par landmark, réutilisé frame après frame pour la continuité.
+_kalman_pool    = {}
+
+
+def _get_kalman(hand_idx):
+    """Retourne (ou crée) les 21 filtres Kalman pour la main hand_idx."""
+    if hand_idx not in _kalman_pool:
+        # 21 filtres indépendants, un par landmark
+        _kalman_pool[hand_idx] = [KalmanCursor() for _ in range(21)]
+    return _kalman_pool[hand_idx]
+
+
+def _apply_kalman(hand_idx, raw_points):
+    """
+    Filtre les 21 landmarks d'une main via leurs filtres Kalman individuels.
+
+    Chaque point passe dans son propre KalmanCursor (position + vitesse 2D).
+    Résultat : tremblements haute-fréquence atténués, mouvements réels conservés.
+
+    Paramètres à ajuster dans kalman_filter.py :
+      processNoiseCov    → ↑ plus réactif, ↓ plus lisse
+      measurementNoiseCov → ↑ ignore plus MediaPipe, ↓ suit plus fidèlement
+    """
+    filters = _get_kalman(hand_idx)
+    filtered = []
+    for i, (x, y) in enumerate(raw_points):
+        fx, fy = filters[i].update(x, y)
+        filtered.append((fx, fy))
+    return filtered
+
+
+# ── Détection de gestes ──────────────────────────────────────────────────────────
 
 def est_poing_ferme(points):
-    poignet = points[0]
-    bouts   = [points[i] for i in [8, 12, 16, 20]]
+    """
+    Main fermée si la distance moyenne des 4 bouts de doigts au poignet
+    est inférieure à SEUIL_POING. Le pouce est exclu (reste visible poing fermé).
+    """
+    poignet  = points[0]
+    bouts    = [points[i] for i in [8, 12, 16, 20]]
     dist_moy = sum(math.hypot(b[0] - poignet[0], b[1] - poignet[1]) for b in bouts) / 4
     return dist_moy < SEUIL_POING
 
+
 def est_pincement(points, hand_idx):
+    """
+    Pincement pouce (4) + index (8) avec hystérésis :
+      - Se déclenche quand dist < SEUIL_PINCEMENT_ON  (22px)
+      - Se relâche quand  dist > SEUIL_PINCEMENT_OFF  (32px)
+    Bloqué si poing détecté.
+    """
     if est_poing_ferme(points):
         _pinch_states[hand_idx] = False
         return False
-        
+
     tx, ty = points[4]
     ix, iy = points[8]
-    dist = math.hypot(tx - ix, ty - iy)
+    dist   = math.hypot(tx - ix, ty - iy)
 
-    etat_actuel = _pinch_states.get(hand_idx, False)
-
-    # Logique d'hystérésis
-    if not etat_actuel and dist < SEUIL_PINCEMENT_ON:
+    etat = _pinch_states.get(hand_idx, False)
+    if not etat and dist < SEUIL_PINCEMENT_ON:
         _pinch_states[hand_idx] = True
-    elif etat_actuel and dist > SEUIL_PINCEMENT_OFF:
+    elif etat and dist > SEUIL_PINCEMENT_OFF:
         _pinch_states[hand_idx] = False
 
     return _pinch_states.get(hand_idx, False)
 
+
 def rotation_3d(landmarks_raw):
-    p0 = landmarks_raw[0]
-    p5 = landmarks_raw[5]
-    p17= landmarks_raw[17]
+    """
+    Estime l'orientation 3D de la main depuis les coordonnées Z de MediaPipe.
+    Retourne {'inclinaison', 'rotation', 'roulis'} en degrés.
+    Utilisé par scene_3d.py pour piloter la rotation de l'objet.
+    """
+    p0  = landmarks_raw[0]
+    p5  = landmarks_raw[5]
+    p17 = landmarks_raw[17]
 
     dx, dy, dz = p5.x - p0.x, p5.y - p0.y, p5.z - p0.z
-    lx, ly, lz = p17.x - p5.x, p17.y - p5.y, p17.z - p5.z
-
-    inclinaison = math.degrees(math.atan2(dy, math.hypot(dx, dz)))
-    rotation    = math.degrees(math.atan2(dz, dx))
-    roulis      = math.degrees(math.atan2(ly, lx))
+    lx, ly     = p17.x - p5.x, p17.y - p5.y
 
     return {
-        'inclinaison': round(inclinaison, 1),
-        'rotation'   : round(rotation, 1),
-        'roulis'     : round(roulis, 1),
+        'inclinaison': round(math.degrees(math.atan2(dy, math.hypot(dx, dz))), 1),
+        'rotation'   : round(math.degrees(math.atan2(dz, dx)), 1),
+        'roulis'     : round(math.degrees(math.atan2(ly, lx)), 1),
     }
+
+
+# ── Rendu liquid glass ───────────────────────────────────────────────────────────
 
 def _draw_liquid_hand(img, points, gestes):
     poing     = gestes['poing']
@@ -121,8 +167,8 @@ def _draw_liquid_hand(img, points, gestes):
                 cv2.circle(ov, (px, py), halo_r, (240, 240, 240), -1)
                 cv2.addWeighted(ov, alpha, img, 1 - alpha, 0, img)
 
-        cv2.circle(img, (px, py), r, (30, 30, 30), -1, cv2.LINE_AA)
-        cv2.circle(img, (px, py), r, (180, 180, 180), 1, cv2.LINE_AA)
+        cv2.circle(img, (px, py), r, (30, 30, 30),    -1, cv2.LINE_AA)
+        cv2.circle(img, (px, py), r, (180, 180, 180),  1, cv2.LINE_AA)
         if not poing:
             cv2.circle(img, (px - 1, py - 1), max(1, r - 2), (255, 255, 255), -1, cv2.LINE_AA)
 
@@ -137,91 +183,69 @@ def _draw_liquid_hand(img, points, gestes):
         cv2.line(img, (ix - 8, iy - 8), (ix + 8, iy + 8), (140, 140, 140), 1, cv2.LINE_AA)
         cv2.line(img, (ix + 8, iy - 8), (ix - 8, iy + 8), (140, 140, 140), 1, cv2.LINE_AA)
 
-def hand_detect_OLD(img):
-    h, w = img.shape[:2]
+
+# ── API publique ─────────────────────────────────────────────────────────────────
+
+def hand_detect(img):
+    """
+    Détecte les mains dans img (BGR).
+    Applique le filtre de Kalman sur les 21 landmarks de chaque main.
+    Dessine le rendu liquid glass.
+
+    Retourne :
+      img       : frame annotée
+      hand_data : liste de dicts par main :
+        {
+          'points'   : 21 (x, y) filtrés par Kalman,
+          'gestes'   : {'poing': bool, 'pincement': bool},
+          'rotation' : {'inclinaison': float, 'rotation': float, 'roulis': float}
+        }
+    """
+    h, w     = img.shape[:2]
     img_rgb  = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
     mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=img_rgb)
     timestamp_ms = int(time.time() * 1000)
 
-    result = landmarker.detect_for_video(mp_image, timestamp_ms)
+    result    = landmarker.detect_for_video(mp_image, timestamp_ms)
     hand_data = []
 
-    # Reset les filtres si aucune main n'est présente à l'écran
     if not result.hand_landmarks:
+        # Plus aucune main visible : on nettoie l'état inter-frames
         _pinch_states.clear()
-        _kalman_filters.clear()
+        _kalman_pool.clear()
+        return img, hand_data
 
-    if result.hand_landmarks:
-        for idx, raw_landmarks in enumerate(result.hand_landmarks):
-            if idx not in _kalman_filters:
-                _kalman_filters[idx] = KalmanCursor()
+    current_ids = set(range(len(result.hand_landmarks)))
 
-            points = [(int(lm.x * w), int(lm.y * h)) for lm in raw_landmarks]
+    # Nettoie les filtres des mains qui ont disparu
+    for stale in set(_kalman_pool.keys()) - current_ids:
+        del _kalman_pool[stale]
+        _pinch_states.pop(stale, None)
 
-            # ── APPLICATION DU FILTRE DE KALMAN SUR L'INDEX ──
-            kx, ky = _kalman_filters[idx].update(points[8][0], points[8][1])
-            points[8] = (kx, ky) # Remplacement par la coordonnée lissée
+    for idx, raw_landmarks in enumerate(result.hand_landmarks):
+        # Points bruts en pixels
+        raw_points = [(int(lm.x * w), int(lm.y * h)) for lm in raw_landmarks]
 
-            gestes = {
-                'poing': est_poing_ferme(points),
-                'pincement': est_pincement(points, idx),
-            }
-            rot = rotation_3d(raw_landmarks)
+        # Kalman sur les 21 landmarks
+        points = _apply_kalman(idx, raw_points)
 
-            hand_data.append({
-                'points'  : points,
-                'gestes'  : gestes,
-                'rotation': rot,
-            })
+        gestes = {
+            'poing'    : est_poing_ferme(points),
+            'pincement': est_pincement(points, idx),
+        }
+        rot = rotation_3d(raw_landmarks)
 
-            _draw_liquid_hand(img, points, gestes)
+        hand_data.append({
+            'points'  : points,
+            'gestes'  : gestes,
+            'rotation': rot,
+        })
+
+        _draw_liquid_hand(img, points, gestes)
 
     return img, hand_data
-
-# ── Variables d'état globales pour la mémoire inter-frames ──────────────────
-_pinch_states = {}
-_kalman_filters = {}
-
-def hand_detect(img):
-    h, w = img.shape[:2]
-    img_rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
-    mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=img_rgb)
-    timestamp_ms = int(time.time() * 1000)
-    result = landmarker.detect_for_video(mp_image, timestamp_ms)
-    hand_data = []
-    
-    # Reset les filtres si aucune main n'est présente à l'écran
-    if not result.hand_landmarks:
-        _pinch_states.clear()
-        _kalman_filters.clear()
-    
-    if result.hand_landmarks:
-        for idx, raw_landmarks in enumerate(result.hand_landmarks):
-            if idx not in _kalman_filters:
-                _kalman_filters[idx] = {i: KalmanCursor() for i in range(21)}
-            
-            points = [(int(lm.x * w), int(lm.y * h)) for lm in raw_landmarks]
-            
-            # ── APPLICATION DU FILTRE DE KALMAN SUR TOUS LES POINTS ──
-            lissed_points = []
-            for i, (px, py) in enumerate(points):
-                kx, ky = _kalman_filters[idx][i].update(px, py)
-                lissed_points.append((kx, ky))
-            
-            gestes = {
-                'poing': est_poing_ferme(lissed_points),
-                'pincement': est_pincement(lissed_points, idx),
-            }
-            rot = rotation_3d(raw_landmarks)
-            hand_data.append({
-                'points': lissed_points,
-                'gestes': gestes,
-                'rotation': rot,
-            })
-            _draw_liquid_hand(img, lissed_points, gestes)
-    return img, hand_data
-
 
 
 def release():
+    """Ferme proprement le landmarker MediaPipe."""
     landmarker.close()

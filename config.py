@@ -21,7 +21,7 @@ CAM = {
     # 0 = webcam intégrée (défaut)
     # 1, 2, ... = caméras externes (USB, capture card, etc.)
     # Tu peux aussi mettre un chemin de fichier vidéo : 'video.mp4'
-    'source': 1,
+    'source': 0,
 
     # Résolution d'affichage (fenêtre visible)
     'display_w': 1280,
@@ -45,7 +45,7 @@ CAM = {
 DETECTION = {
     # Nombre maximum de mains détectées simultanément
     # 1 = plus rapide    |    2 = nécessaire pour le zoom et la pyramide
-    'num_hands': 2,
+    'num_hands': 4,
 
     # Chemin local du modèle MediaPipe (téléchargé automatiquement si absent)
     'model_path': 'hand_landmarker.task',
