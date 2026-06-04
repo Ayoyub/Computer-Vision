@@ -62,7 +62,7 @@ HAND = {
     # Mesuré sur le frame de DÉTECTION (640×360), pas sur l'affichage.
     # ↑ Augmente si le poing n'est pas détecté assez tôt
     # ↓ Diminue si la main ouverte est détectée à tort comme poing
-    'seuil_poing': 65,
+    'seuil_poing': 70,
 
     # ── Hystérésis Pincement ────────────────────────────────────────────────────
     'seuil_pincement_on': 15,   # Distance pour DÉCLENCHER le clic
@@ -72,7 +72,7 @@ HAND = {
     # Même concept mais utilisé dans main.py pour interagir avec les formes 3D.
     # Exprimé sur le frame d'AFFICHAGE (1280×720) après scale.
     # Légèrement plus grand car les coordonnées sont upscalées.
-    'seuil_pincement_shapes': 35,
+    'seuil_pincement_shapes': 80,
 
     # ── Seuil doigts écartés (geste pyramide) ───────────────────────────────────
     # Distance minimale pouce-index pour confirmer que la main est ouverte

@@ -72,34 +72,49 @@ def _apply_kalman(hand_idx: int, raw: list) -> list:
 
 # ── Gesture detection ────────────────────────────────────────────────────────────
 
+def _get_hand_scale(pts: list) -> float:
+    """Calcule la taille de la main (poignet -> base du majeur) comme référence d'échelle."""
+    scale = math.hypot(pts[9][0] - pts[0][0], pts[9][1] - pts[0][1])
+    return scale if scale > 0 else 1.0
+
 def est_poing_ferme(pts: list) -> bool:
     """
-    Fist detection: every fingertip (including thumb) must be closer
-    to the wrist than _SEUIL_POING pixels.
+    Détection biomécanique : Vérifie si les bouts des doigts sont pliés 
+    vers l'intérieur (plus proches du poignet que leurs jointures).
     """
     wrist = pts[0]
-    return all(
-        math.hypot(pts[i][0] - wrist[0], pts[i][1] - wrist[1]) < _SEUIL_POING
-        for i in [4, 8, 12, 16, 20]
-    )
+    # Couples : (Bout du doigt, Jointure du milieu)
+    fingers = [(8, 6), (12, 10), (16, 14), (20, 18)]
+    
+    folded_count = 0
+    for tip, mid in fingers:
+        d_tip = math.hypot(pts[tip][0] - wrist[0], pts[tip][1] - wrist[1])
+        d_mid = math.hypot(pts[mid][0] - wrist[0], pts[mid][1] - wrist[1])
+        
+        # Si le bout du doigt s'est rapproché de la paume par rapport à l'articulation
+        if d_tip < d_mid * 1.05: # Petite marge d'erreur de 5%
+            folded_count += 1
+            
+    # On valide si au moins 3 des 4 doigts principaux sont pliés
+    return folded_count >= 3
+
 
 
 def est_pincement(pts: list, hand_idx: int) -> bool:
-    """
-    Pinch detection (thumb 4 + index 8) with hysteresis to avoid flicker:
-      - activates when distance < _PINCH_ON
-      - deactivates when distance > _PINCH_OFF
-    """
+    """Détection du pincement avec hystérésis proportionnelle."""
+    scale = _get_hand_scale(pts)
     dist = math.hypot(pts[4][0] - pts[8][0], pts[4][1] - pts[8][1])
-    state = _pinch_states.get(hand_idx, False)
+    ratio = dist / scale
 
-    if not state and dist < _PINCH_ON:
+    state = _pinch_states.get(hand_idx, False)
+    
+    # Ratios relatifs : < 0.25 = pincé, > 0.40 = relâché
+    if not state and ratio < 0.25:
         _pinch_states[hand_idx] = True
-    elif state and dist > _PINCH_OFF:
+    elif state and ratio > 0.40:
         _pinch_states[hand_idx] = False
 
     return _pinch_states.get(hand_idx, False)
-
 
 def rotation_3d(raw_landmarks) -> dict:
     """
