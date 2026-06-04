@@ -213,7 +213,8 @@ class MatrixSphere3D(_Shape3D):
                 self.edges.append((c, (i+1) * segments + j))
 
     def draw(self, img):
-        if not self.locked_hand_id:
+        # Rotation auto uniquement quand personne ne tient la forme
+        if self.locked_hand_id is None:
             self.angle_y += 0.003
             self.angle_x += 0.003
         cx, sx = math.cos(self.angle_x), math.sin(self.angle_x)
