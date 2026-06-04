@@ -79,23 +79,35 @@ def _get_hand_scale(pts: list) -> float:
 
 def est_poing_ferme(pts: list) -> bool:
     """
-    Détection biomécanique : Vérifie si les bouts des doigts sont pliés 
-    vers l'intérieur (plus proches du poignet que leurs jointures).
+    Détection biomécanique stricte :
+    Vérifie que les doigts sont fermement enroulés et repliés sur la paume.
     """
     wrist = pts[0]
-    # Couples : (Bout du doigt, Jointure du milieu)
-    fingers = [(8, 6), (12, 10), (16, 14), (20, 18)]
+    
+    # Échelle de référence : distance poignet -> base du majeur
+    scale = math.hypot(pts[9][0] - wrist[0], pts[9][1] - wrist[1])
+    if scale == 0: scale = 1.0
+
+    # Index, Majeur, Annulaire, Auriculaire
+    fingers = [(8, 6, 5), (12, 10, 9), (16, 14, 13), (20, 18, 17)]
     
     folded_count = 0
-    for tip, mid in fingers:
-        d_tip = math.hypot(pts[tip][0] - wrist[0], pts[tip][1] - wrist[1])
-        d_mid = math.hypot(pts[mid][0] - wrist[0], pts[mid][1] - wrist[1])
+    for tip, mid, base in fingers:
+        d_tip_wrist = math.hypot(pts[tip][0] - wrist[0], pts[tip][1] - wrist[1])
+        d_mid_wrist = math.hypot(pts[mid][0] - wrist[0], pts[mid][1] - wrist[1])
+        d_tip_base  = math.hypot(pts[tip][0] - pts[base][0], pts[tip][1] - pts[base][1])
         
-        # Si le bout du doigt s'est rapproché de la paume par rapport à l'articulation
-        if d_tip < d_mid * 1.05: # Petite marge d'erreur de 5%
+        # Condition 1 stricte : le bout du doigt doit être au moins 10% plus proche 
+        # du poignet que ne l'est l'articulation du milieu.
+        is_curled = d_tip_wrist < d_mid_wrist * 0.90
+        
+        # Condition 2 stricte : la distance bout->base doit faire moins de 55% de la paume
+        is_short = d_tip_base < scale * 0.55
+        
+        if is_curled and is_short:
             folded_count += 1
             
-    # On valide si au moins 3 des 4 doigts principaux sont pliés
+    # On valide si au moins 3 des 4 doigts sont fermement repliés
     return folded_count >= 3
 
 

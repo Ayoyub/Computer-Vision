@@ -25,8 +25,6 @@ MENU_OPTIONS = [
     ("Mouse",  270,  (200, 200, 200)),   # bottom
     ("Quit",     0,  (100, 120, 255)),   # right
 ]
-
-
 # ╔══════════════════════════════════════════════════════════════════════════════╗
 # ║  3D SHAPES (Vectorisées avec NumPy)                                        ║
 # ╚══════════════════════════════════════════════════════════════════════════════╝
@@ -131,26 +129,32 @@ class MatrixPyramid3D(_Shape3D):
         if self.pinches:
             cv2.circle(img, (int(self.x), int(self.y)), int(self.radius), self.color, 1)
 
+SHAPE_OPTIONS = [
+    ("Sphere",  90,  (106, 50, 159), MatrixSphere3D, 80),  # top
+    ("Pyramid", 270, (0, 150, 255),  MatrixPyramid3D, 80), # bottom
+    ("Cancel",    0, (100, 100, 100), None, 0),            # right
+]
+
 
 # ╔══════════════════════════════════════════════════════════════════════════════╗
 # ║  RADIAL MENU RENDERER                                                      ║
 # ╚══════════════════════════════════════════════════════════════════════════════╝
 
-def _draw_radial_menu(img, cx, cy, hovered, cursor_x=None, cursor_y=None, rotation_offset=0.0):
-    # Base du point d'ancrage
+def _draw_dynamic_menu(img, cx, cy, hovered, cursor_x, cursor_y, rotation_offset, options_list):
+    """Dessine le menu rotatif (néon/holo) basé sur la liste d'options fournie."""
     cv2.circle(img, (cx, cy), 15, (20, 20, 20), -1)
     cv2.circle(img, (cx, cy), 15, (100, 100, 100), 2, cv2.LINE_AA)
     cv2.circle(img, (cx, cy), 4, (255, 255, 255), -1, cv2.LINE_AA)
 
-    # Ligne élastique
     if cursor_x and cursor_y:
         ov = img.copy()
         cv2.line(ov, (cx, cy), (cursor_x, cursor_y), (255, 255, 255), 3, cv2.LINE_AA)
         cv2.addWeighted(ov, 0.4, img, 0.6, 0, img)
         cv2.circle(img, (cursor_x, cursor_y), 8, (255, 255, 255), -1, cv2.LINE_AA)
 
-    for i, (label, base_angle, color) in enumerate(MENU_OPTIONS):
-        # --- APPLIQUER LA ROTATION ICI ---
+    for i, opt in enumerate(options_list):
+        label, base_angle, color = opt[0], opt[1], opt[2]
+        
         angle_deg = (base_angle + rotation_offset) % 360
         rad = math.radians(angle_deg)
         
@@ -160,7 +164,6 @@ def _draw_radial_menu(img, cx, cy, hovered, cursor_x=None, cursor_y=None, rotati
         
         r = MENU_ICON_RADIUS + (8 if hot else 0)
 
-        # Tracé des branches
         cv2.line(img, (cx, cy), (ox, oy), (80, 80, 80), 1, cv2.LINE_AA)
 
         if hot:
@@ -189,6 +192,7 @@ def _draw_radial_menu(img, cx, cy, hovered, cursor_x=None, cursor_y=None, rotati
         cv2.putText(img, label, (lx, ly), font, scale, (255,255,255) if hot else (170,170,170), 1 if hot else 1, cv2.LINE_AA)
 
 def _draw_hint(img):
+    """Affiche une petite indication textuelle en bas de l'écran."""
     h, w = img.shape[:2]
     hint = "close fist to open radial menu"
     font, scale = cv2.FONT_HERSHEY_SIMPLEX, 0.36
@@ -199,7 +203,6 @@ def _draw_hint(img):
     cv2.rectangle(ov, (lx-6, ly-th-4), (lx+tw+6, ly+4), (12,12,12), -1)
     cv2.addWeighted(ov, 0.45, img, 0.55, 0, img)
     cv2.putText(img, hint, (lx, ly), font, scale, (110,110,110), 1, cv2.LINE_AA)
-
 
 # ╔══════════════════════════════════════════════════════════════════════════════╗
 # ║  CAMERA / DETECTION THREADS                                                ║
@@ -342,16 +345,16 @@ def _update_shape_physics(shape, LISSAGE=3.0):
 
 
 
-def _hovered_option_by_angle(x, y, cx, cy, rotation_offset):
-    """Sélectionne l'option en prenant en compte la rotation dynamique du menu."""
+def _hovered_option_dynamic(x, y, cx, cy, rotation_offset, options_list):
+    """Sélectionne l'option selon l'angle, compatible avec n'importe quelle liste d'options."""
     angle_rad = math.atan2(-(y - cy), x - cx) 
     angle_deg = (math.degrees(angle_rad) + 360) % 360
     
     best_i = -1
     min_diff = float('inf')
     
-    for i, (_, base_angle, _) in enumerate(MENU_OPTIONS):
-        # On ajoute la rotation actuelle à l'angle de base de l'option
+    for i, opt in enumerate(options_list):
+        base_angle = opt[1]
         opt_angle = (base_angle + rotation_offset) % 360
         
         diff = min(abs(angle_deg - opt_angle), 360 - abs(angle_deg - opt_angle))
@@ -379,6 +382,11 @@ def main():
     menu_rotation = 0.0
 
     shapes         = []
+    shape_menu_phase = 0
+    shape_menu_cx    = 0
+    shape_menu_cy    = 0
+    shape_hovered_idx = -1
+    shape_menu_rotation = 0.0
     drawing_path   = []
     spawn_cd       = 0
     shapes_active  = False
@@ -427,29 +435,27 @@ def main():
                 _draw_hint(display)
 
             elif menu_phase == 1:
-                # Ouvert : On maintient le poing et on tire vers une option
                 if hand_data:
                     poing = hand_data[0]['gestes']['poing']
                     pts = [(int(x*SX), int(y*SY)) for x,y in hand_data[0]['points']]
-                    wx, wy = pts[0] # Position actuelle du poignet (le "joystick")
+                    wx, wy = pts[0] 
 
                     dist = _dist((wx, wy), (menu_cx, menu_cy))
                     
-                    # Zone morte au centre pour annuler (40 pixels)
                     if dist > 40:
-                        hovered_idx = _hovered_option_by_angle(wx, wy, menu_cx, menu_cy, menu_rotation)
+                        # 1. On appelle la nouvelle fonction avec MENU_OPTIONS
+                        hovered_idx = _hovered_option_dynamic(wx, wy, menu_cx, menu_cy, menu_rotation, MENU_OPTIONS)
                     else:
                         hovered_idx = -1
 
-                    _draw_radial_menu(display, menu_cx, menu_cy, hovered_idx, wx, wy, menu_rotation)
+                    # 2. On dessine avec la nouvelle fonction et MENU_OPTIONS
+                    _draw_dynamic_menu(display, menu_cx, menu_cy, hovered_idx, wx, wy, menu_rotation, MENU_OPTIONS)
 
-                    # Validation : on OUVRE la main pour confirmer l'action visée
                     if not poing:
                         if hovered_idx != -1:
                             action = MENU_OPTIONS[hovered_idx][0]
                         menu_phase = 0
                 else:
-                    # Sécurité : la main sort du champ, on annule
                     menu_phase = 0
 
             # ── Action dispatch ──────────────────────────────────────────────────────
@@ -472,20 +478,9 @@ def main():
 
             # ── Shapes mode ──────────────────────────────────────────────────────────
             if shapes_active:
-                if len(hand_data) == 2:
-                    h1 = [(int(x*SX), int(y*SY)) for x,y in hand_data[0]['points']]
-                    h2 = [(int(x*SX), int(y*SY)) for x,y in hand_data[1]['points']]
-                    if _dist(h1[0], h2[0]) > 100:
-                        t1, i1 = h1[4], h1[8]
-                        t2, i2 = h2[4], h2[8]
-                        if (_dist(t1,i1) > 50 and _dist(t2,i2) > 50 and
-                                _dist(t1,t2) < 60 and _dist(i1,i2) < 60 and spawn_cd == 0):
-                            cx = (t1[0]+t2[0]+i1[0]+i2[0])//4
-                            cy = (t1[1]+t2[1]+i1[1]+i2[1])//4
-                            shapes.append(MatrixPyramid3D(cx, cy, 80))
-                            spawn_cd = 180
-
+                # 1. Récupération des pincements et des poings actifs
                 active_pinches = []
+                fists = []
                 for hi, hand in enumerate(hand_data):
                     pts = hand['points']
                     tx  = int(pts[4][0]*SX);  ty = int(pts[4][1]*SY)
@@ -493,42 +488,87 @@ def main():
                     cx  = (tx+ix)//2;        cy = (ty+iy)//2
                     is_fist  = hand['gestes']['poing']
                     is_pinch = hand['gestes']['pincement']
+                    
                     if is_pinch or is_fist:
                         active_pinches.append((cx, cy, is_fist, hi))
                         cv2.circle(display, (cx, cy), 8, (0,0,255) if is_fist else (0,255,0), -1)
+                    if is_fist:
+                        fists.append((cx, cy, hi))
 
+                # 2. Gestion de l'état "saisie" des formes existantes
                 for shape in shapes:
                     shape.pinches = []
                     if shape.locked_hand_id is not None:
                         lid = shape.locked_hand_id
                         if lid < len(hand_data):
-                            pts = hand_data[lid]['points']
-                            tx  = int(pts[4][0]*SX);  ty = int(pts[4][1]*SY)
-                            ix  = int(pts[8][0]*SX);  iy = int(pts[8][1]*SY)
-                            cx  = (tx+ix)//2;        cy = (ty+iy)//2
-                            w0 = pts[0]
-                            fist = (
-                                _dist(pts[12], w0) < _dist(pts[9],  w0) and
-                                _dist(pts[16], w0) < _dist(pts[13], w0) and
-                                _dist(pts[20], w0) < _dist(pts[17], w0)
-                            )
+                            # On vérifie si la main verrouillée est toujours en poing
+                            fist = hand_data[lid]['gestes']['poing']
                             if fist:
-                                shape.pinches.append((cx, cy, fist))
+                                pts = hand_data[lid]['points']
+                                tx  = int(pts[4][0]*SX);  ty = int(pts[4][1]*SY)
+                                ix  = int(pts[8][0]*SX);  iy = int(pts[8][1]*SY)
+                                cx  = (tx+ix)//2;        cy = (ty+iy)//2
+                                shape.pinches.append((cx, cy, True))
                             else:
                                 shape.locked_hand_id = None
                         else:
                             shape.locked_hand_id = None
 
+                # Assigner les nouveaux pincements aux formes (si on est assez proche)
                 for (px, py, is_fist, hi) in active_pinches:
                     for shape in shapes:
                         if shape.locked_hand_id == hi:
                             continue
-                        if _dist((px,py), (shape.x, shape.y)) < shape.radius:
+                        if _dist((px,py), (shape.x, shape.y)) < shape.radius * 1.5: # Tolérance élargie pour attraper
                             shape.pinches.append((px, py, is_fist))
                             if is_fist:
                                 shape.locked_hand_id = hi
                             break
 
+                # 3. Le Menu Radial pour générer des formes
+                grabbing_something = any(s.pinches for s in shapes)
+                
+                shape_menu_rotation = (shape_menu_rotation + 0.6) % 360
+                
+                if shape_menu_phase == 0:
+                    # S'il y a un poing, ET qu'on ne touche aucune forme, on ouvre le menu
+                    if fists and not grabbing_something:
+                        fx, fy, _ = fists[0]
+                        # Petite sécurité : s'assurer qu'on est loin du centre de toutes les formes
+                        too_close = any(_dist((fx, fy), (s.x, s.y)) < s.radius * 2 for s in shapes)
+                        if not too_close:
+                            shape_menu_cx, shape_menu_cy = fx, fy
+                            shape_menu_phase = 1
+                            shape_hovered_idx = -1
+                
+                elif shape_menu_phase == 1:
+                    # On cherche la main qui a initialisé le menu (celle en poing)
+                    if fists:
+                        fx, fy, _ = fists[0]
+                        dist = _dist((fx, fy), (shape_menu_cx, shape_menu_cy))
+                        
+                        if dist > 40:
+                            # On réutilise la fonction angulaire existante
+                            # Note: _hovered_option_by_angle doit être mise à jour pour accepter une liste d'options
+                            shape_hovered_idx = _hovered_option_dynamic(fx, fy, shape_menu_cx, shape_menu_cy, shape_menu_rotation, SHAPE_OPTIONS)
+                        else:
+                            shape_hovered_idx = -1
+
+                        # On dessine le sous-menu (on réutilise _draw_radial_menu mais avec nos couleurs)
+                        _draw_dynamic_menu(display, shape_menu_cx, shape_menu_cy, shape_hovered_idx, fx, fy, shape_menu_rotation, SHAPE_OPTIONS)
+
+                    else:
+                        # Le poing a été relâché
+                        if shape_hovered_idx != -1:
+                            label, _, _, ShapeClass, default_radius = SHAPE_OPTIONS[shape_hovered_idx]
+                            if ShapeClass is not None:
+                                # On crée la forme à l'endroit de l'ancrage
+                                shapes.append(ShapeClass(shape_menu_cx, shape_menu_cy, default_radius))
+                        
+                        shape_menu_phase = 0
+                        shape_hovered_idx = -1
+
+                # 4. Suppression par triple clic (inchangé)
                 for shape in shapes:
                     pinched = len(shape.pinches) > 0
                     if pinched and not shape.was_pinched_last_frame:
@@ -541,29 +581,9 @@ def main():
                     shape.was_pinched_last_frame = pinched
                 shapes = [s for s in shapes if not s.to_delete]
 
-                grabbing = any(s.pinches for s in shapes)
-                if len(active_pinches) == 1 and not grabbing:
-                    px, py, is_fist, _ = active_pinches[0]
-                    if not is_fist:
-                        drawing_path.append((px, py))
-                        for i in range(1, len(drawing_path)):
-                            cv2.line(display, drawing_path[i-1], drawing_path[i], (255, 200, 0), 4)
-                else:
-                    if len(drawing_path) > 20:
-                        sp, ep = drawing_path[0], drawing_path[-1]
-                        if _dist(sp, ep) < 100:
-                            contour = np.array(drawing_path, dtype=np.int32).reshape(-1,1,2)
-                            (cx, cy), r = cv2.minEnclosingCircle(contour)
-                            if r > 30:
-                                errs = [abs(_dist(p, (cx,cy)) - r) for p in drawing_path]
-                                if (sum(errs)/len(errs)) / r < 0.25:
-                                    shapes.append(MatrixSphere3D(int(cx), int(cy), int(r)))
-                    drawing_path.clear()
-
+                # 5. Mise à jour de la physique et dessin
                 for shape in shapes:
                     _update_shape_physics(shape, LISSAGE)
-
-                for shape in shapes:
                     shape.draw(display)
 
             cv2.imshow("Vision AI", display)
