@@ -6,6 +6,7 @@ import time
 import math
 import numpy as np
 import virt_mouse
+import glob_metal
 
 from hand_detect import hand_detect, release
 from config import CAM
@@ -23,6 +24,7 @@ FRAMES_CONFIRM   = 22
 MENU_OPTIONS = [
     ("Shapes",  90,  (180, 100, 255)),
     ("Mouse",  270,  (200, 200, 200)),
+    ("Glob",   180,  (160, 220, 200)),   # gauche — métal liquide
     ("Quit",     0,  (100, 120, 255)),
 ]
 
@@ -146,10 +148,28 @@ def _draw_shapes_icon(img, ox, oy, r, color, hot):
         cv2.line(img, (ox+dx, oy+dy), (ox+dx+o, oy+dy-o), c, th, cv2.LINE_AA)
 
 
+def _draw_glob_icon(img, ox, oy, r, color, hot):
+    """Icône Glob : deux cercles qui se fondent (metaball stylisé)."""
+    c  = color if hot else (100, 160, 140)
+    th = 1
+    ro = int(r * 0.36)
+    off = int(r * 0.22)
+    # Deux cercles qui se chevauchent
+    cv2.circle(img, (ox - off, oy), ro, c, th, cv2.LINE_AA)
+    cv2.circle(img, (ox + off, oy), ro, c, th, cv2.LINE_AA)
+    # Petit glint sur chacun
+    if hot:
+        cv2.circle(img, (ox - off - ro//3, oy - ro//3), max(1, ro//4),
+                   (255, 255, 255), -1, cv2.LINE_AA)
+        cv2.circle(img, (ox + off - ro//3, oy - ro//3), max(1, ro//4),
+                   (255, 255, 255), -1, cv2.LINE_AA)
+
+
 # Table d'icônes du menu principal : label → fonction de dessin
 _MAIN_ICON_DRAWERS = {
     "Shapes": _draw_shapes_icon,
     "Mouse":  _draw_mouse_icon,
+    "Glob":   _draw_glob_icon,
     "Quit":   _draw_quit_icon,
 }
 
@@ -162,116 +182,75 @@ _SHAPE_ICON_DRAWERS = {
 
 
 # ╔══════════════════════════════════════════════════════════════════════════════╗
-# ║  Y2K METAL SIGILISM — RENDERER                                             ║
+# ║  TOUCHDESIGNER-STYLE WIREFRAME RENDERER                                    ║
 # ╚══════════════════════════════════════════════════════════════════════════════╝
+import td_render as td
 
-# Palettes Y2K par shape
-# Chaque palette : (edge_near, edge_far, node_core, node_rim, node_glint, grabbed_rim)
-_Y2K_PALETTES = {
+# Per-shape accent colours (float32 BGR, 0-1)
+# TD palette: one hue per shape, varying luminosity only
+_TD_PALETTES = {
     'sphere': {
-        'edge_near'  : (220, 220, 255),   # blanc argenté quasi-blanc (proche)
-        'edge_mid'   : (160, 200, 255),   # cyan froid
-        'edge_far'   : ( 80, 100, 180),   # bleu profond (loin)
-        'node_core'  : ( 15,  15,  25),   # quasi-noir
-        'node_rim'   : (200, 220, 255),   # chrome froid
-        'node_glint' : (255, 255, 255),   # reflet blanc
-        'grabbed_rim': (180, 255, 220),   # vert mercure quand tenu
-        'aura'       : ( 60, 120, 200),   # halo de fond
+        'edge_near': np.array([0.90, 0.95, 0.70], np.float32),  # near-white cyan
+        'edge_far' : np.array([0.15, 0.22, 0.08], np.float32),  # deep indigo
+        'node_rim' : np.array([0.80, 0.90, 0.55], np.float32),
+        'grabbed'  : np.array([0.60, 1.00, 0.70], np.float32),  # soft green when held
     },
     'pyramid': {
-        'edge_near'  : (240, 230, 200),   # or pâle (proche)
-        'edge_mid'   : (180, 160, 100),   # or vieilli
-        'edge_far'   : ( 80,  70,  40),   # or sombre (loin)
-        'node_core'  : ( 20,  15,  10),
-        'node_rim'   : (220, 200, 140),   # or chrome
-        'node_glint' : (255, 250, 220),   # reflet doré
-        'grabbed_rim': (255, 200,  80),   # or chaud quand tenu
-        'aura'       : ( 80,  60,  20),
+        'edge_near': np.array([0.90, 0.88, 0.60], np.float32),  # warm gold-white
+        'edge_far' : np.array([0.14, 0.12, 0.05], np.float32),
+        'node_rim' : np.array([0.80, 0.75, 0.45], np.float32),
+        'grabbed'  : np.array([0.40, 0.80, 1.00], np.float32),  # cool blue when held
     },
 }
 
 
-def _lerp_color(c1, c2, t):
-    """Interpolation linéaire entre deux couleurs BGR."""
-    t = max(0.0, min(1.0, t))
-    return (
-        int(c1[0] + (c2[0]-c1[0]) * t),
-        int(c1[1] + (c2[1]-c1[1]) * t),
-        int(c1[2] + (c2[2]-c1[2]) * t),
-    )
-
-
-def _draw_y2k_wireframe(img, proj, depths, edges,
-                        node_r=3, grabbed=False, palette='sphere'):
+def _draw_td_wireframe(img, proj, depths, edges,
+                       node_r=2, grabbed=False, palette='sphere'):
     """
-    Rendu Y2K metal sigilism liquid metal pour un wireframe 3D.
+    TouchDesigner-style wireframe renderer.
 
-    Effets appliqués :
-    - Arêtes avec dégradé de profondeur (z-depth tinting) :
-        proche = chrome brillant, loin = couleur sombre
-    - Double tracé des arêtes : trait fin sombre + trait plus fin brillant
-        (simule la réflexion d'une arête chromée)
-    - Nœuds comme gouttes de mercure : fond sombre, rim métallique, glint blanc
-    - Halo d'aura diffuse autour du centre (sigil glow)
-    - Quand tenu : rim des nœuds vire à la couleur 'grabbed_rim'
+    Pipeline:
+      1. Draw hair-thin lines + nodes onto a float32 emission layer
+         — depth fades from bright near to dim far
+      2. Gaussian bloom pass on emission
+      3. Additive composite onto img (which is already dimmed by hand_detect)
     """
-    pal = _Y2K_PALETTES.get(palette, _Y2K_PALETTES['sphere'])
-
     if not proj:
         return
 
-    # ── Halo d'aura (sigil glow) ──────────────────────────────────────────────
-    cx = int(np.mean([p[0] for p in proj]))
-    cy = int(np.mean([p[1] for p in proj]))
-    for r_aura, alpha in [(55, 0.04), (35, 0.06), (18, 0.09)]:
-        ov = img.copy()
-        cv2.circle(ov, (cx, cy), r_aura, pal['aura'], -1)
-        cv2.addWeighted(ov, alpha, img, 1-alpha, 0, img)
+    pal  = _TD_PALETTES.get(palette, _TD_PALETTES['sphere'])
+    h, w = img.shape[:2]
+    em   = td.make_emission(h, w)
 
-    # ── Normalisation de la profondeur ────────────────────────────────────────
-    d_min, d_max = min(depths), max(depths)
-    d_range = d_max - d_min if d_max != d_min else 1.0
+    d_min   = min(depths)
+    d_max   = max(depths)
+    d_range = max(d_max - d_min, 1e-6)
 
-    # ── Arêtes ────────────────────────────────────────────────────────────────
+    rim_col = pal['grabbed'] if grabbed else pal['node_rim']
+
+    # ── Edges ────────────────────────────────────────────────────────────────────
     for a, b in edges:
         depth_t = ((depths[a] + depths[b]) * 0.5 - d_min) / d_range
-        # depth_t = 0 → proche (brillant), 1 → loin (sombre)
+        # Lerp colour: near (bright) → far (dim)
+        t   = float(depth_t)
+        col = pal['edge_near'] * (1.0 - t) + pal['edge_far'] * t
+        td.draw_line_em(em, proj[a], proj[b], color=col)
 
-        # Couleur principale selon profondeur
-        if depth_t < 0.5:
-            c_main = _lerp_color(pal['edge_near'], pal['edge_mid'], depth_t * 2)
-        else:
-            c_main = _lerp_color(pal['edge_mid'], pal['edge_far'], (depth_t-0.5)*2)
-
-        pa, pb = proj[a], proj[b]
-
-        # Trait sombre sous-jacent (épaisseur 2) — donne de la profondeur
-        shadow = _lerp_color((5,5,10), pal['edge_far'], 0.3)
-        cv2.line(img, pa, pb, shadow, 2, cv2.LINE_AA)
-
-        # Trait principal
-        cv2.line(img, pa, pb, c_main, 1, cv2.LINE_AA)
-
-        # Surbrillance fine au centre de l'arête pour les faces proches
-        if depth_t < 0.35:
-            mx, my = (pa[0]+pb[0])//2, (pa[1]+pb[1])//2
-            cv2.circle(img, (mx, my), 1, (255,255,255), -1, cv2.LINE_AA)
-
-    # ── Nœuds (gouttes de mercure) ────────────────────────────────────────────
-    rim_color = pal['grabbed_rim'] if grabbed else pal['node_rim']
-
+    # ── Nodes ────────────────────────────────────────────────────────────────────
     for i, (px, py) in enumerate(proj):
         depth_t = (depths[i] - d_min) / d_range
-        r = max(1, int(node_r * (1.0 - depth_t * 0.4)))   # plus petit en profondeur
+        # Nodes closer to camera are slightly larger
+        r   = max(1, int(node_r * (1.1 - depth_t * 0.5)))
+        rim = rim_col * (1.0 - depth_t * 0.6)
+        td.draw_node_em(em, (px, py), r=r,
+                        core=td.TD_WHITE * (0.9 - depth_t * 0.7),
+                        rim=rim)
 
-        # Fond sombre
-        cv2.circle(img, (px, py), r, pal['node_core'], -1, cv2.LINE_AA)
-        # Rim métallique
-        cv2.circle(img, (px, py), r, rim_color, 1, cv2.LINE_AA)
-        # Glint (nœuds proches uniquement)
-        if depth_t < 0.4 and r >= 2:
-            gx, gy = px - max(1, r//3), py - max(1, r//3)
-            cv2.circle(img, (gx, gy), max(1, r//3), pal['node_glint'], -1, cv2.LINE_AA)
+    # ── Bloom & composite ─────────────────────────────────────────────────────────
+    bloomed = td.bloom(em, kernel=25, sigma=10.0, strength=1.1)
+    img_f   = img.astype(np.float32) / 255.0
+    result  = np.clip(img_f + bloomed, 0, 1)
+    img[:]  = (result * 255).astype(np.uint8)
 
 
 # ╔══════════════════════════════════════════════════════════════════════════════╗
@@ -337,7 +316,7 @@ class MatrixSphere3D(_Shape3D):
         rotated = self.nodes @ R.T
         proj   = [(int(nx*self.radius+self.x), int(ny*self.radius+self.y)) for nx,ny,_ in rotated]
         depths = [nz for _,_,nz in rotated]
-        _draw_y2k_wireframe(img, proj, depths, self.edges,
+        _draw_td_wireframe(img, proj, depths, self.edges,
                             node_r=2, grabbed=bool(self.pinches), palette='sphere')
 
 
@@ -363,7 +342,7 @@ class MatrixPyramid3D(_Shape3D):
         rotated = self.nodes @ R.T
         proj   = [(int(nx*self.radius+self.x), int(ny*self.radius+self.y)) for nx,ny,_ in rotated]
         depths = [nz for _,_,nz in rotated]
-        _draw_y2k_wireframe(img, proj, depths, self.edges,
+        _draw_td_wireframe(img, proj, depths, self.edges,
                             node_r=4, grabbed=bool(self.pinches), palette='pyramid')
 
 
@@ -735,8 +714,12 @@ def main():
                 virt_mouse.run_mouse_mode(cam, det)
                 menu_phase  = 0
                 hovered_idx = -1
-                # FIX: ne pas vider les shapes au retour du mode souris
-                # (shapes.clear() supprimé)
+
+            elif action == "Glob":
+                action = None
+                glob_metal.run_glob_mode(cam, det)
+                menu_phase  = 0
+                hovered_idx = -1
 
             elif action == "Shapes":
                 action        = None
