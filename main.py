@@ -7,6 +7,7 @@ import math
 import numpy as np
 import virt_mouse
 import glob_metal
+import gestures as gest
 
 from hand_detect import hand_detect, release
 from config import CAM
@@ -278,6 +279,7 @@ class _Shape3D:
         self.last_pinch_time       = 0.0
         self.was_pinched_last_frame = False
         self.to_delete             = False
+        self.rotation_speed_mult   = 1.0   # controlled by spread gesture
 
 
 class MatrixSphere3D(_Shape3D):
@@ -306,8 +308,8 @@ class MatrixSphere3D(_Shape3D):
 
     def draw(self, img):
         if self.locked_hand_id is None:
-            self.angle_y += 0.003
-            self.angle_x += 0.003
+            self.angle_y += 0.003 * self.rotation_speed_mult
+            self.angle_x += 0.003 * self.rotation_speed_mult
         cx, sx = math.cos(self.angle_x), math.sin(self.angle_x)
         cy, sy = math.cos(self.angle_y), math.sin(self.angle_y)
         Rx = np.array([[1,0,0],[0,cx,-sx],[0,sx,cx]])
@@ -332,8 +334,8 @@ class MatrixPyramid3D(_Shape3D):
 
     def draw(self, img):
         if self.locked_hand_id is None:
-            self.angle_y += 0.04
-            self.angle_x += 0.02
+            self.angle_y += 0.04 * self.rotation_speed_mult
+            self.angle_x += 0.02 * self.rotation_speed_mult
         cx, sx = math.cos(self.angle_x), math.sin(self.angle_x)
         cy, sy = math.cos(self.angle_y), math.sin(self.angle_y)
         Rx = np.array([[1,0,0],[0,cx,-sx],[0,sx,cx]])
@@ -606,6 +608,7 @@ def _hovered_option_dynamic(x, y, cx, cy, rotation_offset, options_list):
     return best_i if min_diff <= 45 else -1
 
 
+
 # ╔══════════════════════════════════════════════════════════════════════════════╗
 # ║  MAIN LOOP                                                                 ║
 # ╚══════════════════════════════════════════════════════════════════════════════╝
@@ -635,7 +638,9 @@ def main():
 
     shapes_active       = False
     LISSAGE             = 3.0
-    MAX_SHAPES          = 8       # FIX: limite pour éviter le ralentissement
+    MAX_SHAPES          = 8
+    double_fist_counter = [0]
+    last_touched_shape  = None   # ref to most recently interacted shape
 
     print("Ready — close your fist to open the radial menu.")
     while cam.read() is None:
@@ -728,6 +733,26 @@ def main():
 
             # ── Shapes mode ──────────────────────────────────────────────────────
             if shapes_active and hand_data:   # FIX: guard hand_data vide
+                # ── Double-fist → back to menu ───────────────────────────────────
+                if gest.check_double_fist(hand_data, double_fist_counter):
+                    shapes_active      = False
+                    menu_phase         = 0
+                    shape_menu_phase   = 0
+                    shape_hovered_idx  = -1
+                    last_touched_shape = None
+
+                gest.draw_double_fist_hint(display, double_fist_counter)
+
+                # ── Two-hand scissor spread → last-touched shape rotation speed ──
+                spread_active, speed_mult, mid0, mid1 = \
+                    gest.read_two_hand_spread(hand_data, SX, SY)
+
+                if spread_active and last_touched_shape is not None \
+                        and last_touched_shape in shapes:
+                    last_touched_shape.rotation_speed_mult = speed_mult
+
+                gest.draw_spread_indicator(display, mid0, mid1, speed_mult, spread_active)
+
                 # 1. Récupération des pincements et des poings
                 active_pinches = []
                 fists = []
@@ -771,6 +796,7 @@ def main():
                             shape.pinches.append((px, py, is_fist))
                             if is_fist:
                                 shape.locked_hand_id = hi
+                            last_touched_shape = shape   # track for spread gesture
                             break
 
                 # 3. Menu radial shapes

@@ -2,6 +2,7 @@ import cv2
 import tkinter as tk
 from pynput.mouse import Controller, Button
 from config import CAM
+import gestures as gest
 
 CAM_W, CAM_H = CAM['detect_w'], CAM['detect_h']
 
@@ -91,10 +92,11 @@ def run_mouse_mode(cam, det):
     SCREEN_H = root.winfo_screenheight()
     root.destroy()
 
-    mouse       = Controller()
-    clic_locked = False
+    mouse            = Controller()
+    clic_locked      = False
+    double_fist_ctr  = [0]
 
-    print(f"Mode Souris: {SCREEN_W}x{SCREEN_H} | ESC = retour menu | C = recalibrer zone")
+    print(f"Mouse mode: {SCREEN_W}x{SCREEN_H} | both fists = menu | C = recalibrate | ESC = menu")
 
     SX = CAM['display_w'] / CAM_W
     SY = CAM['display_h'] / CAM_H
@@ -187,13 +189,17 @@ def run_mouse_mode(cam, det):
 
             _draw_hud(display, pts_disp, poing, pincement, ax1, ay1, ax2, ay2)
 
+        # ── Double-fist → back to menu ────────────────────────────────────────────
+        if gest.check_double_fist(hand_data if hand_data else [], double_fist_ctr):
+            break
+        gest.draw_double_fist_hint(display, double_fist_ctr)
+
         cv2.imshow("Vision AI", display)
         key = cv2.waitKey(1)
 
-        if key == 27:   # ESC → retour menu
+        if key == 27:
             break
         elif key == ord('c') or key == ord('C'):
-            # Lance la calibration
             calibrating    = True
             calib_frames   = 0
             calib_xmin, calib_xmax = DW, 0

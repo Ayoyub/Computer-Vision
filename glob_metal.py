@@ -20,6 +20,7 @@ import numpy as np
 import time
 from config import CAM
 import td_render as td
+import gestures as gest
 
 # ── Resolution ────────────────────────────────────────────────────────────────────
 SIM_SCALE  = 4
@@ -257,12 +258,13 @@ def run_glob_mode(cam, det):
     SX_S = SIM_W / CAM_W;  SY_S = SIM_H / CAM_H
     SX_D = DISPLAY_W / CAM_W;  SY_D = DISPLAY_H / CAM_H
 
-    blobs        = [Blob() for _ in range(N_BLOBS)]
-    split_cd     = 0
-    SPLIT_CD     = 18
-    t            = 0.0
+    blobs            = [Blob() for _ in range(N_BLOBS)]
+    split_cd         = 0
+    SPLIT_CD         = 18
+    t                = 0.0
+    double_fist_ctr  = [0]
 
-    print("Glob Metal | ESC = back to menu")
+    print("Glob Metal | both fists = menu | ESC = menu")
 
     while True:
         frame = cam.read()
@@ -335,6 +337,11 @@ def run_glob_mode(cam, det):
         display = (result * 255).astype(np.uint8)
 
         _draw_hud(display, len(blobs))
+
+        # ── Double-fist → back to menu ────────────────────────────────────────────
+        if gest.check_double_fist(hand_data if hand_data else [], double_fist_ctr):
+            break
+        gest.draw_double_fist_hint(display, double_fist_ctr)
 
         t += 0.033
         cv2.imshow("Vision AI", display)
