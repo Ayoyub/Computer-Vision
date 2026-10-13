@@ -1,0 +1,11 @@
+# Core dependencies for the Computer-Vision project (Python 3.12)
+#
+# Install with:
+#   .venv312\Scripts\pip install --index-url https://mirrors.aliyun.com/pypi/simple/ --trusted-host mirrors.aliyun.com -r requirements.txt
+#
+# NOTE: use opencv-contrib-python, NOT opencv-python-headless.
+# mediapipe already depends on opencv-contrib-python, which provides the cv2
+# module. Installing opencv-python-headless on top of it leaves a broken cv2
+# directory (no __init__.py, no cvtColor) — they share the same cv2/ folder.
+
+mediapipe==1.1.0

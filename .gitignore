@@ -1,0 +1,17 @@
+# Virtual environments
+.venv/
+.venv312/
+venv/
+env/
+
+# Python bytecode
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+
+# Editor / OS
+.DS_Store
+.idea/
+.vscode/*
+!.vscode/settings.json
