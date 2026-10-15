@@ -16,22 +16,23 @@ No new dependencies — pure numpy + opencv.
 
 import cv2
 import numpy as np
+from config import VISUALS
 
-# ── Global style constants ────────────────────────────────────────────────────────
-CAM_DIM          = 0.18    # how much the camera feed is dimmed (0=black, 1=full)
-BLOOM_STRENGTH   = 0.75    # glow layer intensity multiplier
-BLOOM_KERNEL     = 31      # gaussian blur kernel size for bloom (must be odd)
-BLOOM_SIGMA      = 12.0    # gaussian sigma
+# ── Global style constants (from config) ───────────────────────────────────────
+CAM_DIM        = VISUALS['cam_dim']
+BLOOM_STRENGTH = VISUALS['bloom_strength']
+BLOOM_KERNEL   = VISUALS['bloom_kernel']
+BLOOM_SIGMA    = VISUALS['bloom_sigma']
 
-# Palette — one accent hue, varying luminosity (TD style: near-white → cyan → deep indigo)
+# Palette — one accent hue, varying luminosity (TD style)
 # All in BGR float (0-1)
-TD_WHITE   = np.array([1.00, 1.00, 1.00], dtype=np.float32)  # core catchlight
-TD_CYAN    = np.array([0.85, 0.95, 0.60], dtype=np.float32)  # mid glow  (B,G,R)
-TD_BLUE    = np.array([0.55, 0.40, 0.15], dtype=np.float32)  # outer glow
-TD_DIM     = np.array([0.12, 0.10, 0.04], dtype=np.float32)  # dim interior
+TD_WHITE   = np.array(VISUALS['td_white'], dtype=np.float32)
+TD_CYAN    = np.array(VISUALS['td_cyan'],  dtype=np.float32)
+TD_BLUE    = np.array(VISUALS['td_blue'],   dtype=np.float32)
+TD_DIM     = np.array(VISUALS['td_dim'],    dtype=np.float32)
 
 # Background tint for the camera (very dark blue-grey)
-BG_TINT    = np.array([0.06, 0.05, 0.03], dtype=np.float32)  # additive tint on cam
+BG_TINT    = np.array(VISUALS['bg_tint'],   dtype=np.float32)
 
 
 def dim_camera(frame_bgr: np.ndarray) -> np.ndarray:
@@ -45,12 +46,14 @@ def dim_camera(frame_bgr: np.ndarray) -> np.ndarray:
 
 
 def bloom(emission: np.ndarray,
-          kernel: int = BLOOM_KERNEL,
-          sigma:  float = BLOOM_SIGMA,
+          kernel:   int   = BLOOM_KERNEL,
+          sigma:    float = BLOOM_SIGMA,
           strength: float = BLOOM_STRENGTH) -> np.ndarray:
     """
     Given a float32 emission layer (0-1), return emission + glow.
     """
+    if kernel % 2 == 0:
+        kernel += 1  # gaussian kernel must be odd
     glow = cv2.GaussianBlur(emission, (kernel, kernel), sigma)
     return np.clip(emission + glow * strength, 0, 1)
 
@@ -67,6 +70,19 @@ def composite(cam_dim: np.ndarray, emission_bloomed: np.ndarray) -> np.ndarray:
 def make_emission(h: int, w: int) -> np.ndarray:
     """Create a zeroed float32 emission layer (H, W, 3)."""
     return np.zeros((h, w, 3), dtype=np.float32)
+
+
+def add_emission(dst: np.ndarray, src: np.ndarray,
+                 strength: float = 1.0) -> np.ndarray:
+    """
+    Additively add a (possibly bloomed) emission layer to a uint8 frame
+    in-place, returning the frame. Avoids the per-call astype/clip
+    round-trip when many layers are stacked.
+    """
+    dst_f = dst.astype(np.float32) / 255.0
+    dst_f = np.clip(dst_f + src * strength, 0, 1)
+    dst[:] = (dst_f * 255).astype(np.uint8)
+    return dst
 
 
 def draw_line_em(em: np.ndarray, p1, p2,
@@ -89,10 +105,10 @@ def draw_node_em(em: np.ndarray, pt, r: int = 2,
                (float(rim[0]), float(rim[1]), float(rim[2])),
                1, cv2.LINE_AA)
     # Core punch (black sink — draws attention to the node)
-    cv2.circle(em, (cx, cy), max(1, r-1), (0, 0, 0), -1, cv2.LINE_AA)
+    cv2.circle(em, (cx, cy), max(1, r - 1), (0, 0, 0), -1, cv2.LINE_AA)
     # Catchlight
     if r >= 2:
-        cv2.circle(em, (cx-1, cy-1), max(1, r//2),
+        cv2.circle(em, (cx - 1, cy - 1), max(1, r // 2),
                    (float(core[0]), float(core[1]), float(core[2])),
                    -1, cv2.LINE_AA)
 
@@ -109,11 +125,9 @@ def draw_fingertip_em(em: np.ndarray, pt, pinch: bool = False, fist: bool = Fals
                    (float(TD_WHITE[0]), float(TD_WHITE[1]), float(TD_WHITE[2])),
                    1, cv2.LINE_AA)
         cv2.circle(em, (cx, cy), 14,
-                   (float(TD_CYAN[0]*0.5), float(TD_CYAN[1]*0.5), float(TD_CYAN[2]*0.5)),
+                   (float(TD_CYAN[0] * 0.5), float(TD_CYAN[1] * 0.5), float(TD_CYAN[2] * 0.5)),
                    1, cv2.LINE_AA)
     elif fist:
         dim = 0.25
-        cv2.line(em, (cx-6, cy-6), (cx+6, cy+6),
-                 (dim, dim, dim), 1, cv2.LINE_AA)
-        cv2.line(em, (cx+6, cy-6), (cx-6, cy+6),
-                 (dim, dim, dim), 1, cv2.LINE_AA)
+        cv2.line(em, (cx - 6, cy - 6), (cx + 6, cy + 6), (dim, dim, dim), 1, cv2.LINE_AA)
+        cv2.line(em, (cx + 6, cy - 6), (cx - 6, cy + 6), (dim, dim, dim), 1, cv2.LINE_AA)

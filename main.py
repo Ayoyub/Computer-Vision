@@ -1,25 +1,32 @@
-import sys
-import os
-import cv2
+"""
+main.py — Vision AI : radial menu, shapes 3D, modes (mouse / glob)
+══════════════════════════════════════════════════════════════════
+Architecture :
+  CameraStream      → background thread, frame producer
+  DetectionThread   → background thread, hand detection (MediaPipe + 1€)
+  main loop         → state machine : menu / shapes / mouse / glob
+"""
+import math
 import threading
 import time
-import math
-import numpy as np
-import virt_mouse
-import glob_metal
-import gestures as gest
 
+import cv2
+import numpy as np
+
+import gestures as gest
+import glob_metal
+import virt_mouse
+import td_render as td
 from hand_detect import hand_detect, release
-from config import CAM
+from config import CAM, MENU, SHAPES, PHYSICS
+from shapes_3d import MatrixSphere3D, MatrixPyramid3D
 
 DETECT_W,  DETECT_H  = CAM['detect_w'],  CAM['detect_h']
 DISPLAY_W, DISPLAY_H = CAM['display_w'], CAM['display_h']
 
-# ── Radial menu constants ────────────────────────────────────────────────────────
-MENU_RADIUS      = 130
-MENU_ICON_RADIUS = 38
-SEUIL_SELECT     = 48
-FRAMES_CONFIRM   = 22
+# ── Radial menu constants (from config) ─────────────────────────────────────────
+MENU_RADIUS      = MENU['radius']
+MENU_ICON_RADIUS = MENU['icon_radius']
 
 # (label, angle_deg, color_BGR)
 MENU_OPTIONS = [
@@ -33,15 +40,10 @@ MENU_OPTIONS = [
 # ║  MINI-SHAPE ICON RENDERERS (dessinées dans les bulles du menu)             ║
 # ╚══════════════════════════════════════════════════════════════════════════════╝
 
-# Angles pré-calculés pour les icônes (évite de les recalculer chaque frame)
-_SPHERE_ICON_ANGLES_Y = 0.0
-_SPHERE_ICON_ANGLES_X = 0.0
-_PYRAMID_ICON_ANGLE_Y = 0.0
-_PYRAMID_ICON_ANGLE_X = 0.0
-
 # Géométrie sphère mini (moins de segments pour la lisibilité à petite taille)
 _SPHERE_MINI_NODES = None
 _SPHERE_MINI_EDGES = []
+
 
 def _build_sphere_mini(rings=5, segments=8):
     global _SPHERE_MINI_NODES, _SPHERE_MINI_EDGES
@@ -64,21 +66,28 @@ def _build_sphere_mini(rings=5, segments=8):
             edges.append((c, (i + 1) * segments + j))
     _SPHERE_MINI_EDGES = edges
 
+
 _build_sphere_mini()
 
 # Pyramide mini (mêmes proportions que MatrixPyramid3D)
-_PYRAMID_MINI_NODES = np.array([(0,-1,0), (-0.866,0.5,-0.5), (0.866,0.5,-0.5), (0,0.5,1)], dtype=float)
-_PYRAMID_MINI_EDGES = [(0,1),(0,2),(0,3),(1,2),(2,3),(3,1)]
+_PYRAMID_MINI_NODES = np.array([(0, -1, 0), (-0.866, 0.5, -0.5),
+                                 (0.866, 0.5, -0.5), (0, 0.5, 1)], dtype=float)
+_PYRAMID_MINI_EDGES = [(0, 1), (0, 2), (0, 3), (1, 2), (2, 3), (3, 1)]
+
+
+def _rot_matrices(angle_x, angle_y):
+    """Shared rotation matrices (Ry @ Rx) for icons and 3D shapes."""
+    cx, sx = math.cos(angle_x), math.sin(angle_x)
+    cy, sy = math.cos(angle_y), math.sin(angle_y)
+    Rx = np.array([[1, 0, 0], [0, cx, -sx], [0, sx, cx]])
+    Ry = np.array([[cy, 0, sy], [0, 1, 0], [-sy, 0, cy]])
+    return Ry @ Rx
 
 
 def _draw_sphere_icon(img, ox, oy, r, color, angle_y, angle_x, hot):
     """Dessine un wireframe sphère miniature centré en (ox, oy) dans un rayon r."""
-    icon_r = r * 0.60  # la sphère occupe 60% du rayon de la bulle
-    cx_f, sx_f = math.cos(angle_x), math.sin(angle_x)
-    cy_f, sy_f = math.cos(angle_y), math.sin(angle_y)
-    Rx = np.array([[1,0,0],[0,cx_f,-sx_f],[0,sx_f,cx_f]])
-    Ry = np.array([[cy_f,0,sy_f],[0,1,0],[-sy_f,0,cy_f]])
-    R  = Ry @ Rx
+    icon_r = r * 0.60
+    R = _rot_matrices(angle_x, angle_y)
     rotated = _SPHERE_MINI_NODES @ R.T
     proj = [(int(nx * icon_r + ox), int(ny * icon_r + oy)) for nx, ny, _ in rotated]
     line_color = (200, 140, 255) if hot else (130, 80, 180)
@@ -92,77 +101,64 @@ def _draw_sphere_icon(img, ox, oy, r, color, angle_y, angle_x, hot):
 def _draw_pyramid_icon(img, ox, oy, r, color, angle_y, angle_x, hot):
     """Dessine un wireframe pyramide miniature centré en (ox, oy) dans un rayon r."""
     icon_r = r * 0.65
-    cx_f, sx_f = math.cos(angle_x), math.sin(angle_x)
-    cy_f, sy_f = math.cos(angle_y), math.sin(angle_y)
-    Rx = np.array([[1,0,0],[0,cx_f,-sx_f],[0,sx_f,cx_f]])
-    Ry = np.array([[cy_f,0,sy_f],[0,1,0],[-sy_f,0,cy_f]])
-    R  = Ry @ Rx
+    R = _rot_matrices(angle_x, angle_y)
     rotated = _PYRAMID_MINI_NODES @ R.T
     proj = [(int(nx * icon_r + ox), int(ny * icon_r + oy)) for nx, ny, _ in rotated]
     line_color = (120, 200, 255) if hot else (60, 130, 200)
     node_color = (200, 220, 255) if hot else (140, 170, 220)
     for a, b in _PYRAMID_MINI_EDGES:
-        cv2.line(img, proj[a], proj[b], line_color, 2, cv2.LINE_AA)
+        cv2.line(img, proj[a], proj[b], node_color, 2, cv2.LINE_AA)
     for px, py in proj:
         cv2.circle(img, (px, py), 3 if hot else 2, node_color, -1, cv2.LINE_AA)
 
 
 def _draw_mouse_icon(img, ox, oy, r, color, hot):
     """Icône souris stylisée (contour + scroll wheel)."""
-    w  = int(r * 0.55)
-    h  = int(r * 0.80)
-    br = int(w * 0.5)
+    w = int(r * 0.55)
+    h = int(r * 0.80)
     x0, y0 = ox - w, oy - h // 2
     c = color if hot else (150, 150, 150)
-    # Corps de la souris
-    cv2.rectangle(img, (x0, y0), (x0 + w*2, y0 + h), (30, 30, 30), -1)
-    cv2.rectangle(img, (x0, y0), (x0 + w*2, y0 + h), c, 1, cv2.LINE_AA)
-    # Séparateur boutons
-    cv2.line(img, (ox, y0), (ox, y0 + h//2), c, 1, cv2.LINE_AA)
-    # Molette
+    cv2.rectangle(img, (x0, y0), (x0 + w * 2, y0 + h), (30, 30, 30), -1)
+    cv2.rectangle(img, (x0, y0), (x0 + w * 2, y0 + h), c, 1, cv2.LINE_AA)
+    cv2.line(img, (ox, y0), (ox, y0 + h // 2), c, 1, cv2.LINE_AA)
     wh, ww = int(h * 0.18), int(w * 0.22)
-    cv2.rectangle(img, (ox - ww, y0 + int(h*0.12)),
-                  (ox + ww, y0 + int(h*0.12) + wh), c, -1)
+    cv2.rectangle(img, (ox - ww, y0 + int(h * 0.12)),
+                  (ox + ww, y0 + int(h * 0.12) + wh), c, -1)
 
 
 def _draw_quit_icon(img, ox, oy, r, color, hot):
     """Icône X de fermeture."""
-    c  = color if hot else (130, 130, 160)
+    c = color if hot else (130, 130, 160)
     sz = int(r * 0.42)
     th = 2 if hot else 1
-    cv2.line(img, (ox-sz, oy-sz), (ox+sz, oy+sz), c, th, cv2.LINE_AA)
-    cv2.line(img, (ox+sz, oy-sz), (ox-sz, oy+sz), c, th, cv2.LINE_AA)
+    cv2.line(img, (ox - sz, oy - sz), (ox + sz, oy + sz), c, th, cv2.LINE_AA)
+    cv2.line(img, (ox + sz, oy - sz), (ox - sz, oy + sz), c, th, cv2.LINE_AA)
 
 
 def _draw_shapes_icon(img, ox, oy, r, color, hot):
     """Icône 'Shapes' : petit cube wireframe."""
-    c  = color if hot else (130, 100, 180)
-    s  = int(r * 0.38)
-    o  = int(s * 0.45)
+    c = color if hot else (130, 100, 180)
+    s = int(r * 0.38)
+    o = int(s * 0.45)
     th = 1
-    # Face avant
-    cv2.rectangle(img, (ox-s, oy-s), (ox+s, oy+s), c, th, cv2.LINE_AA)
-    # Décalage perspective
-    cv2.rectangle(img, (ox-s+o, oy-s-o), (ox+s+o, oy+s-o), c, th, cv2.LINE_AA)
-    # 4 arêtes de profondeur
-    for dx, dy in [(-s,-s),(s,-s),(s,s),(-s,s)]:
-        cv2.line(img, (ox+dx, oy+dy), (ox+dx+o, oy+dy-o), c, th, cv2.LINE_AA)
+    cv2.rectangle(img, (ox - s, oy - s), (ox + s, oy + s), c, th, cv2.LINE_AA)
+    cv2.rectangle(img, (ox - s + o, oy - s - o), (ox + s + o, oy + s - o), c, th, cv2.LINE_AA)
+    for dx, dy in [(-s, -s), (s, -s), (s, s), (-s, s)]:
+        cv2.line(img, (ox + dx, oy + dy), (ox + dx + o, oy + dy - o), c, th, cv2.LINE_AA)
 
 
 def _draw_glob_icon(img, ox, oy, r, color, hot):
     """Icône Glob : deux cercles qui se fondent (metaball stylisé)."""
-    c  = color if hot else (100, 160, 140)
+    c = color if hot else (100, 160, 140)
     th = 1
     ro = int(r * 0.36)
     off = int(r * 0.22)
-    # Deux cercles qui se chevauchent
     cv2.circle(img, (ox - off, oy), ro, c, th, cv2.LINE_AA)
     cv2.circle(img, (ox + off, oy), ro, c, th, cv2.LINE_AA)
-    # Petit glint sur chacun
     if hot:
-        cv2.circle(img, (ox - off - ro//3, oy - ro//3), max(1, ro//4),
+        cv2.circle(img, (ox - off - ro // 3, oy - ro // 3), max(1, ro // 4),
                    (255, 255, 255), -1, cv2.LINE_AA)
-        cv2.circle(img, (ox + off - ro//3, oy - ro//3), max(1, ro//4),
+        cv2.circle(img, (ox + off - ro // 3, oy - ro // 3), max(1, ro // 4),
                    (255, 255, 255), -1, cv2.LINE_AA)
 
 
@@ -181,182 +177,14 @@ _SHAPE_ICON_DRAWERS = {
     "Cancel":  _draw_quit_icon,
 }
 
-
-# ╔══════════════════════════════════════════════════════════════════════════════╗
-# ║  TOUCHDESIGNER-STYLE WIREFRAME RENDERER                                    ║
-# ╚══════════════════════════════════════════════════════════════════════════════╝
-import td_render as td
-
-# Per-shape accent colours (float32 BGR, 0-1)
-# TD palette: one hue per shape, varying luminosity only
-_TD_PALETTES = {
-    'sphere': {
-        'edge_near': np.array([0.90, 0.95, 0.70], np.float32),  # near-white cyan
-        'edge_far' : np.array([0.15, 0.22, 0.08], np.float32),  # deep indigo
-        'node_rim' : np.array([0.80, 0.90, 0.55], np.float32),
-        'grabbed'  : np.array([0.60, 1.00, 0.70], np.float32),  # soft green when held
-    },
-    'pyramid': {
-        'edge_near': np.array([0.90, 0.88, 0.60], np.float32),  # warm gold-white
-        'edge_far' : np.array([0.14, 0.12, 0.05], np.float32),
-        'node_rim' : np.array([0.80, 0.75, 0.45], np.float32),
-        'grabbed'  : np.array([0.40, 0.80, 1.00], np.float32),  # cool blue when held
-    },
-}
-
-
-def _draw_td_wireframe(img, proj, depths, edges,
-                       node_r=2, grabbed=False, palette='sphere'):
-    """
-    TouchDesigner-style wireframe renderer.
-
-    Pipeline:
-      1. Draw hair-thin lines + nodes onto a float32 emission layer
-         — depth fades from bright near to dim far
-      2. Gaussian bloom pass on emission
-      3. Additive composite onto img (which is already dimmed by hand_detect)
-    """
-    if not proj:
-        return
-
-    pal  = _TD_PALETTES.get(palette, _TD_PALETTES['sphere'])
-    h, w = img.shape[:2]
-    em   = td.make_emission(h, w)
-
-    d_min   = min(depths)
-    d_max   = max(depths)
-    d_range = max(d_max - d_min, 1e-6)
-
-    rim_col = pal['grabbed'] if grabbed else pal['node_rim']
-
-    # ── Edges ────────────────────────────────────────────────────────────────────
-    for a, b in edges:
-        depth_t = ((depths[a] + depths[b]) * 0.5 - d_min) / d_range
-        # Lerp colour: near (bright) → far (dim)
-        t   = float(depth_t)
-        col = pal['edge_near'] * (1.0 - t) + pal['edge_far'] * t
-        td.draw_line_em(em, proj[a], proj[b], color=col)
-
-    # ── Nodes ────────────────────────────────────────────────────────────────────
-    for i, (px, py) in enumerate(proj):
-        depth_t = (depths[i] - d_min) / d_range
-        # Nodes closer to camera are slightly larger
-        r   = max(1, int(node_r * (1.1 - depth_t * 0.5)))
-        rim = rim_col * (1.0 - depth_t * 0.6)
-        td.draw_node_em(em, (px, py), r=r,
-                        core=td.TD_WHITE * (0.9 - depth_t * 0.7),
-                        rim=rim)
-
-    # ── Bloom & composite ─────────────────────────────────────────────────────────
-    bloomed = td.bloom(em, kernel=25, sigma=10.0, strength=1.1)
-    img_f   = img.astype(np.float32) / 255.0
-    result  = np.clip(img_f + bloomed, 0, 1)
-    img[:]  = (result * 255).astype(np.uint8)
-
-
-# ╔══════════════════════════════════════════════════════════════════════════════╗
-# ║  3D SHAPES                                                                 ║
-# ╚══════════════════════════════════════════════════════════════════════════════╝
-
-class _Shape3D:
-    def __init__(self, x, y, radius, color):
-        self.x, self.y             = float(x), float(y)
-        self.radius                = float(radius)
-        self.color                 = color
-        self.vx = self.vy          = 0.0
-        self.angle_x = self.angle_y = 0.0
-        self.pinches               = []
-        self.locked_hand_id        = None
-        self.is_two_handed         = False
-        self.is_grabbed_single     = False
-        self.is_rotating_manually  = False
-        self.initial_radius        = float(radius)
-        self.initial_pinch_dist    = 0
-        self.two_hand_offset       = (0, 0)
-        self.drag_offset           = (0, 0)
-        self.last_pinch_pos        = (0, 0)
-        self.pinch_count           = 0
-        self.last_pinch_time       = 0.0
-        self.was_pinched_last_frame = False
-        self.to_delete             = False
-        self.rotation_speed_mult   = 1.0   # controlled by spread gesture
-
-
-class MatrixSphere3D(_Shape3D):
-    def __init__(self, x, y, radius):
-        super().__init__(x, y, radius, (106, 50, 159))
-        self.nodes, self.edges = [], []
-        self._build(rings=10, segments=14)
-
-    def _build(self, rings, segments):
-        nodes = []
-        for i in range(rings + 1):
-            phi = (i / rings) * math.pi
-            for j in range(segments):
-                theta = (j / segments) * 2 * math.pi
-                nodes.append([
-                    math.sin(phi) * math.cos(theta),
-                    math.cos(phi),
-                    math.sin(phi) * math.sin(theta),
-                ])
-        self.nodes = np.array(nodes)
-        for i in range(rings):
-            for j in range(segments):
-                c = i * segments + j
-                self.edges.append((c, i * segments + (j+1) % segments))
-                self.edges.append((c, (i+1) * segments + j))
-
-    def draw(self, img):
-        if self.locked_hand_id is None:
-            self.angle_y += 0.003 * self.rotation_speed_mult
-            self.angle_x += 0.003 * self.rotation_speed_mult
-        cx, sx = math.cos(self.angle_x), math.sin(self.angle_x)
-        cy, sy = math.cos(self.angle_y), math.sin(self.angle_y)
-        Rx = np.array([[1,0,0],[0,cx,-sx],[0,sx,cx]])
-        Ry = np.array([[cy,0,sy],[0,1,0],[-sy,0,cy]])
-        R  = Ry @ Rx
-        rotated = self.nodes @ R.T
-        proj   = [(int(nx*self.radius+self.x), int(ny*self.radius+self.y)) for nx,ny,_ in rotated]
-        depths = [nz for _,_,nz in rotated]
-        _draw_td_wireframe(img, proj, depths, self.edges,
-                            node_r=2, grabbed=bool(self.pinches), palette='sphere')
-
-
-class MatrixPyramid3D(_Shape3D):
-    EDGES = [(0,1),(0,2),(0,3),(1,2),(2,3),(3,1)]
-
-    def __init__(self, x, y, radius):
-        super().__init__(x, y, radius, (0, 150, 255))
-        # FIX: copie propre pour chaque instance (évite le partage de tableau)
-        self.nodes = np.array([(0,-1,0), (-0.866,0.5,-0.5),
-                                (0.866,0.5,-0.5), (0,0.5,1)], dtype=float)
-        self.edges = self.EDGES
-
-    def draw(self, img):
-        if self.locked_hand_id is None:
-            self.angle_y += 0.04 * self.rotation_speed_mult
-            self.angle_x += 0.02 * self.rotation_speed_mult
-        cx, sx = math.cos(self.angle_x), math.sin(self.angle_x)
-        cy, sy = math.cos(self.angle_y), math.sin(self.angle_y)
-        Rx = np.array([[1,0,0],[0,cx,-sx],[0,sx,cx]])
-        Ry = np.array([[cy,0,sy],[0,1,0],[-sy,0,cy]])
-        R  = Ry @ Rx
-        rotated = self.nodes @ R.T
-        proj   = [(int(nx*self.radius+self.x), int(ny*self.radius+self.y)) for nx,ny,_ in rotated]
-        depths = [nz for _,_,nz in rotated]
-        _draw_td_wireframe(img, proj, depths, self.edges,
-                            node_r=4, grabbed=bool(self.pinches), palette='pyramid')
-
-
 SHAPE_OPTIONS = [
-    ("Sphere",  90,  (106, 50, 159), MatrixSphere3D,  80),
-    ("Pyramid", 270, (0, 150, 255),  MatrixPyramid3D, 80),
+    ("Sphere",  90,  SHAPES['sphere_color'],  MatrixSphere3D,  80),
+    ("Pyramid", 270, SHAPES['pyramid_color'], MatrixPyramid3D, SHAPES['pyramid_radius_initial']),
     ("Cancel",    0, (100, 100, 100), None, 0),
 ]
 
-
 # ╔══════════════════════════════════════════════════════════════════════════════╗
-# ║  RADIAL MENU RENDERER                                                      ║
+# ║  RADIAL MENU RENDERER — batched overlay (1 img.copy per menu)              ║
 # ╚══════════════════════════════════════════════════════════════════════════════╝
 
 # Angles animés des icônes 3D dans le menu (mis à jour dans la boucle principale)
@@ -370,6 +198,8 @@ def _draw_dynamic_menu(img, cx, cy, hovered, cursor_x, cursor_y,
                        rotation_offset, options_list, icon_drawers=None):
     """
     Dessine le menu rotatif avec icônes personnalisées par option.
+    Toutes les semi-transparences sont accumulées sur UNE seule couche
+    overlay puis composée en un seul addWeighted (performance).
     icon_drawers : dict {label: callable} ou None pour les icônes standard.
     """
     global _menu_sphere_ay, _menu_sphere_ax, _menu_pyramid_ay, _menu_pyramid_ax
@@ -379,42 +209,37 @@ def _draw_dynamic_menu(img, cx, cy, hovered, cursor_x, cursor_y,
     cv2.circle(img, (cx, cy), 15, (100, 100, 100), 2, cv2.LINE_AA)
     cv2.circle(img, (cx, cy), 4, (255, 255, 255), -1, cv2.LINE_AA)
 
+    ov = img.copy()  # ← unique overlay pour tout le menu
+
     if cursor_x and cursor_y:
-        # Un seul addWeighted pour la ligne de visée
-        ov = img.copy()
         cv2.line(ov, (cx, cy), (cursor_x, cursor_y), (255, 255, 255), 3, cv2.LINE_AA)
-        cv2.addWeighted(ov, 0.4, img, 0.6, 0, img)
-        cv2.circle(img, (cursor_x, cursor_y), 8, (255, 255, 255), -1, cv2.LINE_AA)
 
     for i, opt in enumerate(options_list):
         label, base_angle, color = opt[0], opt[1], opt[2]
 
         angle_deg = (base_angle + rotation_offset) % 360
-        rad       = math.radians(angle_deg)
-        ox  = int(cx + MENU_RADIUS * math.cos(rad))
-        oy  = int(cy - MENU_RADIUS * math.sin(rad))
+        rad = math.radians(angle_deg)
+        ox = int(cx + MENU_RADIUS * math.cos(rad))
+        oy = int(cy - MENU_RADIUS * math.sin(rad))
         hot = (i == hovered)
-        r   = MENU_ICON_RADIUS + (8 if hot else 0)
+        r = MENU_ICON_RADIUS + (8 if hot else 0)
 
-        cv2.line(img, (cx, cy), (ox, oy), (80, 80, 80), 1, cv2.LINE_AA)
+        # Ligne centre → bulle (dans le overlay, translucide)
+        cv2.line(ov, (cx, cy), (ox, oy), (80, 80, 80), 1, cv2.LINE_AA)
 
-        # Glow (hot only) — 1 seul addWeighted par anneau
+        # Glow (hot only) — accumulé dans l'overlay
         if hot:
-            for glow_r, alpha in [(r+12, 0.12), (r+6, 0.14), (r+3, 0.16)]:
-                ov = img.copy()
+            for glow_r in (r + 12, r + 6, r + 3):
                 cv2.circle(ov, (ox, oy), glow_r, color, -1)
-                cv2.addWeighted(ov, alpha, img, 1-alpha, 0, img)
 
-        # Fond de bulle (1 addWeighted)
-        ov = img.copy()
+        # Fond de bulle (semi-transparent, accumulé)
         cv2.circle(ov, (ox, oy), r, color if hot else (40, 40, 40), -1)
-        cv2.addWeighted(ov, 0.7, img, 0.3, 0, img)
 
-        # Contour
+        # Contour (opaque, direct sur img)
         cv2.circle(img, (ox, oy), r, color if hot else (120, 120, 120),
                    2 if hot else 1, cv2.LINE_AA)
 
-        # ── Icône dans la bulle ──────────────────────────────────────────────────
+        # ── Icône dans la bulle (opaque, direct sur img) ────────────────────────
         if icon_drawers and label in icon_drawers:
             drawer = icon_drawers[label]
             if drawer is None:
@@ -428,21 +253,22 @@ def _draw_dynamic_menu(img, cx, cy, hovered, cursor_x, cursor_y,
             else:
                 drawer(img, ox, oy, r, color, hot)
         else:
-            # Menu principal : icônes statiques selon le label
             main_drawer = _MAIN_ICON_DRAWERS.get(label)
             if main_drawer:
                 main_drawer(img, ox, oy, r, color, hot)
 
-        # Label texte sous la bulle
+        # Label texte sous la bulle (fond opaque sombre sur img, texte direct)
         font, scale = cv2.FONT_HERSHEY_SIMPLEX, 0.45 if hot else 0.40
         (tw, th), _ = cv2.getTextSize(label, font, scale, 1)
-        lx, ly = ox - tw//2, oy + th//2 + r + 15
-
-        ov = img.copy()
-        cv2.rectangle(ov, (lx-6, ly-th-6), (lx+tw+6, ly+6), (10,10,10), -1)
-        cv2.addWeighted(ov, 0.8, img, 0.2, 0, img)
+        lx, ly = ox - tw // 2, oy + th // 2 + r + 15
+        cv2.rectangle(img, (lx - 6, ly - th - 6), (lx + tw + 6, ly + 6), (10, 10, 10), -1)
         cv2.putText(img, label, (lx, ly), font, scale,
-                    (255,255,255) if hot else (170,170,170), 1, cv2.LINE_AA)
+                    (255, 255, 255) if hot else (170, 170, 170), 1, cv2.LINE_AA)
+
+    # Un seul addWeighted pour tout l'overlay du menu
+    cv2.addWeighted(ov, 0.45, img, 0.55, 0, img)
+    if cursor_x and cursor_y:
+        cv2.circle(img, (cursor_x, cursor_y), 8, (255, 255, 255), -1, cv2.LINE_AA)
 
 
 def _draw_hint(img):
@@ -450,34 +276,35 @@ def _draw_hint(img):
     hint = "close fist to open radial menu"
     font, scale = cv2.FONT_HERSHEY_SIMPLEX, 0.36
     (tw, th), _ = cv2.getTextSize(hint, font, scale, 1)
-    lx, ly = w//2 - tw//2, h - 14
-    ov = img.copy()
-    cv2.rectangle(ov, (lx-6, ly-th-4), (lx+tw+6, ly+4), (12,12,12), -1)
-    cv2.addWeighted(ov, 0.45, img, 0.55, 0, img)
-    cv2.putText(img, hint, (lx, ly), font, scale, (110,110,110), 1, cv2.LINE_AA)
-
+    lx, ly = w // 2 - tw // 2, h - 14
+    cv2.rectangle(img, (lx - 6, ly - th - 4), (lx + tw + 6, ly + 4), (12, 12, 12), -1)
+    cv2.putText(img, hint, (lx, ly), font, scale, (110, 110, 110), 1, cv2.LINE_AA)
 
 # ╔══════════════════════════════════════════════════════════════════════════════╗
 # ║  CAMERA / DETECTION THREADS                                                ║
 # ╚══════════════════════════════════════════════════════════════════════════════╝
 
 class CameraStream:
+    """Background thread that keeps one fresh (flipped) camera frame."""
+
     def __init__(self, src, width, height):
         self.cap = cv2.VideoCapture(src)
-        self.cap.set(cv2.CAP_PROP_FRAME_WIDTH,  width)
+        self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, width)
         self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, height)
-        self.cap.set(cv2.CAP_PROP_BUFFERSIZE,   CAM['buffer_size'])
-        self.frame   = None
-        self.lock    = threading.Lock()
+        self.cap.set(cv2.CAP_PROP_BUFFERSIZE, CAM['buffer_size'])
+        self.frame = None
+        self.lock = threading.Lock()
         self.running = True
-        threading.Thread(target=self._read, daemon=True).start()
+        self.thread = threading.Thread(target=self._read, daemon=True)
+        self.thread.start()
 
     def _read(self):
         while self.running:
             ok, f = self.cap.read()
             if ok:
+                f = cv2.flip(f, 1)
                 with self.lock:
-                    self.frame = cv2.flip(f, 1)
+                    self.frame = f
 
     def read(self):
         with self.lock:
@@ -485,19 +312,24 @@ class CameraStream:
 
     def stop(self):
         self.running = False
+        self.thread.join(timeout=1.0)
         self.cap.release()
 
 
 class DetectionThread:
+    """Background thread running MediaPipe on the small frame.
+    Uses a threading.Event instead of busy-poll sleep."""
+
     def __init__(self):
-        self._in        = None
-        self._in_lock   = threading.Lock()
-        self._out       = None
-        self._data      = []
-        self._out_lock  = threading.Lock()
-        self._event     = threading.Event()   # FIX: remplace busy-poll sleep(0.001)
-        self.running    = True
-        threading.Thread(target=self._work, daemon=True).start()
+        self._in = None
+        self._in_lock = threading.Lock()
+        self._out = None
+        self._data = []
+        self._out_lock = threading.Lock()
+        self._event = threading.Event()
+        self.running = True
+        self.thread = threading.Thread(target=self._work, daemon=True)
+        self.thread.start()
 
     def _work(self):
         while self.running:
@@ -509,7 +341,7 @@ class DetectionThread:
                 continue
             f, data = hand_detect(f)
             with self._out_lock:
-                self._out  = f
+                self._out = f
                 self._data = data
 
     def submit(self, frame):
@@ -525,36 +357,47 @@ class DetectionThread:
     def stop(self):
         self.running = False
         self._event.set()
-
+        self.thread.join(timeout=1.0)
 
 # ╔══════════════════════════════════════════════════════════════════════════════╗
 # ║  HELPERS & PHYSICS                                                         ║
 # ╚══════════════════════════════════════════════════════════════════════════════╝
 
 def _dist(p1, p2):
-    return math.hypot(p1[0]-p2[0], p1[1]-p2[1])
+    return math.hypot(p1[0] - p2[0], p1[1] - p2[1])
 
 
-def _update_shape_physics(shape, LISSAGE=3.0):
+LISSAGE    = PHYSICS['lissage']
+FRICTION   = PHYSICS['friction']
+V_MIN      = PHYSICS['vitesse_min']
+ROT_SENS   = PHYSICS['rotation_sensibilite']
+R_MIN      = PHYSICS['radius_min']
+R_MAX      = PHYSICS['radius_max']
+
+
+def _update_shape_physics(shape):
+    """Move/rotate/resize a shape toward its pinch targets, with inertia."""
     shape.is_rotating_manually = False
 
     if len(shape.pinches) == 1:
         px, py, is_fist = shape.pinches[0]
         if not shape.is_grabbed_single:
             shape.is_grabbed_single = True
-            shape.is_two_handed     = False
-            shape.drag_offset       = (shape.x - px, shape.y - py)
-            shape.last_pinch_pos    = (px, py)
+            shape.is_two_handed = False
+            shape.drag_offset = (shape.x - px, shape.y - py)
+            shape.last_pinch_pos = (px, py)
 
         if is_fist:
+            # Rotation manuelle au poing
             shape.is_rotating_manually = True
             dx = px - shape.last_pinch_pos[0]
             dy = py - shape.last_pinch_pos[1]
-            shape.angle_y += dx * 0.015
-            shape.angle_x -= dy * 0.015
+            shape.angle_y += dx * ROT_SENS
+            shape.angle_x -= dy * ROT_SENS
             shape.drag_offset = (shape.x - px, shape.y - py)
             shape.vx = shape.vy = 0
         else:
+            # Drag & drop lissé
             tx = px + shape.drag_offset[0]
             ty = py + shape.drag_offset[1]
             shape.vx = (tx - shape.x) / LISSAGE
@@ -565,19 +408,19 @@ def _update_shape_physics(shape, LISSAGE=3.0):
 
     elif len(shape.pinches) == 2:
         shape.is_grabbed_single = False
-        (p1x,p1y,_), (p2x,p2y,_) = shape.pinches[0], shape.pinches[1]
-        ccx, ccy = (p1x+p2x)//2, (p1y+p2y)//2
-        cpd = _dist((p1x,p1y),(p2x,p2y))
+        (p1x, p1y, _), (p2x, p2y, _) = shape.pinches[0], shape.pinches[1]
+        ccx, ccy = (p1x + p2x) // 2, (p1y + p2y) // 2
+        cpd = _dist((p1x, p1y), (p2x, p2y))
 
         if not shape.is_two_handed:
-            shape.is_two_handed      = True
+            shape.is_two_handed = True
             shape.initial_pinch_dist = cpd
-            shape.initial_radius     = shape.radius
-            shape.two_hand_offset    = (shape.x - ccx, shape.y - ccy)
+            shape.initial_radius = shape.radius
+            shape.two_hand_offset = (shape.x - ccx, shape.y - ccy)
         else:
             if shape.initial_pinch_dist > 0:
                 sf = cpd / shape.initial_pinch_dist
-                nr = max(30, min(400, int(shape.initial_radius * sf)))
+                nr = max(R_MIN, min(R_MAX, int(shape.initial_radius * sf)))
                 shape.radius += (nr - shape.radius) / LISSAGE
 
         tx = ccx + shape.two_hand_offset[0]
@@ -589,13 +432,18 @@ def _update_shape_physics(shape, LISSAGE=3.0):
 
     else:
         shape.is_grabbed_single = shape.is_two_handed = False
-        shape.x  += shape.vx;  shape.y  += shape.vy
-        shape.vx *= 0.85;      shape.vy *= 0.85
-        if abs(shape.vx) < 0.1: shape.vx = 0
-        if abs(shape.vy) < 0.1: shape.vy = 0
+        shape.x += shape.vx
+        shape.y += shape.vy
+        shape.vx *= FRICTION
+        shape.vy *= FRICTION
+        if abs(shape.vx) < V_MIN:
+            shape.vx = 0
+        if abs(shape.vy) < V_MIN:
+            shape.vy = 0
 
 
 def _hovered_option_dynamic(x, y, cx, cy, rotation_offset, options_list):
+    """Index of the menu option within ±MENU['hover_angle'] of the cursor, else -1."""
     angle_rad = math.atan2(-(y - cy), x - cx)
     angle_deg = (math.degrees(angle_rad) + 360) % 360
     best_i, min_diff = -1, float('inf')
@@ -604,14 +452,18 @@ def _hovered_option_dynamic(x, y, cx, cy, rotation_offset, options_list):
         diff = min(abs(angle_deg - opt_angle), 360 - abs(angle_deg - opt_angle))
         if diff < min_diff:
             min_diff = diff
-            best_i   = i
-    return best_i if min_diff <= 45 else -1
-
-
+            best_i = i
+    return best_i if min_diff <= MENU['hover_angle'] else -1
 
 # ╔══════════════════════════════════════════════════════════════════════════════╗
 # ║  MAIN LOOP                                                                 ║
 # ╚══════════════════════════════════════════════════════════════════════════════╝
+
+TRIPLE_WINDOW = SHAPES['triple_clic_fenetre']
+GRAB_RANGE    = SHAPES['grab_range_mult']
+SPAWN_DIST    = SHAPES['spawn_min_dist_mult']
+MAX_SHAPES    = SHAPES['max_shapes']
+
 
 def main():
     global _menu_sphere_ay, _menu_sphere_ax, _menu_pyramid_ay, _menu_pyramid_ax
@@ -620,34 +472,32 @@ def main():
     det = DetectionThread()
 
     # ── Menu principal ───────────────────────────────────────────────────────────
-    menu_phase     = 0
-    menu_cx        = DISPLAY_W // 2
-    menu_cy        = DISPLAY_H // 2
-    hovered_idx    = -1
-    action         = None
-    menu_rotation  = 0.0          # FIX: gelée à l'ouverture → voir ci-dessous
-
+    menu_phase = 0
+    menu_cx = DISPLAY_W // 2
+    menu_cy = DISPLAY_H // 2
+    hovered_idx = -1
+    action = None
+    menu_rotation = 0.0
+    menu_rotation_frozen = 0.0   # rotation figée pendant que le menu est ouvert
 
     # ── Mode shapes ──────────────────────────────────────────────────────────────
-    shapes              = []
-    shape_menu_phase    = 0
-    shape_menu_cx       = 0
-    shape_menu_cy       = 0
-    shape_hovered_idx   = -1
+    shapes = []
+    shape_menu_phase = 0
+    shape_menu_cx = 0
+    shape_menu_cy = 0
+    shape_hovered_idx = -1
     shape_menu_rotation = 0.0
-
-    shapes_active       = False
-    LISSAGE             = 3.0
-    MAX_SHAPES          = 8
+    shape_menu_rotation_frozen = 0.0
+    shapes_active = False
     double_fist_counter = [0]
-    last_touched_shape  = None   # ref to most recently interacted shape
+    last_touched_shape = None  # ref to most recently interacted shape
+
+    SX = DISPLAY_W / DETECT_W
+    SY = DISPLAY_H / DETECT_H
 
     print("Ready — close your fist to open the radial menu.")
     while cam.read() is None:
         time.sleep(0.01)
-
-    SX = DISPLAY_W / DETECT_W
-    SY = DISPLAY_H / DETECT_H
 
     try:
         while True:
@@ -664,43 +514,47 @@ def main():
             now = time.time()
 
             # ── Animation des icônes 3D dans les menus ───────────────────────────
-            _menu_sphere_ay  = (_menu_sphere_ay  + 0.04) % (2*math.pi)
-            _menu_sphere_ax  = (_menu_sphere_ax  + 0.02) % (2*math.pi)
-            _menu_pyramid_ay = (_menu_pyramid_ay + 0.05) % (2*math.pi)
-            _menu_pyramid_ax = (_menu_pyramid_ax + 0.02) % (2*math.pi)
+            _menu_sphere_ay = (_menu_sphere_ay + 0.04) % (2 * math.pi)
+            _menu_sphere_ax = (_menu_sphere_ax + 0.02) % (2 * math.pi)
+            _menu_pyramid_ay = (_menu_pyramid_ay + 0.05) % (2 * math.pi)
+            _menu_pyramid_ax = (_menu_pyramid_ax + 0.02) % (2 * math.pi)
 
             # ── Rotation continue du menu (fond) ─────────────────────────────────
-            menu_rotation        = (menu_rotation        + 0.4) % 360
-            shape_menu_rotation  = (shape_menu_rotation  + 0.4) % 360
+            # Le menu principal et le sous-menu shapes tournent quand ils sont
+            # fermés, et la rotation est GELÉE dès qu'ils s'ouvrent (FIX).
+            if menu_phase != 1:
+                menu_rotation = (menu_rotation + 0.4) % 360
+            if shape_menu_phase != 1:
+                shape_menu_rotation = (shape_menu_rotation + 0.4) % 360
 
             # ── FSM Menu principal ───────────────────────────────────────────────
             if menu_phase == 0:
                 if hand_data and hand_data[0]['gestes']['poing']:
-                    pts = [(int(x*SX), int(y*SY)) for x,y in hand_data[0]['points']]
+                    pts = [(int(x * SX), int(y * SY)) for x, y in hand_data[0]['points']]
                     menu_cx, menu_cy = pts[0]
                     menu_phase = 1
                     hovered_idx = -1
                     # FIX: geler la rotation à l'instant d'ouverture
-                    pass  # rotation non gelée
+                    menu_rotation_frozen = menu_rotation
                 _draw_hint(display)
 
             elif menu_phase == 1:
                 if hand_data:
                     poing = hand_data[0]['gestes']['poing']
-                    pts   = [(int(x*SX), int(y*SY)) for x,y in hand_data[0]['points']]
+                    pts = [(int(x * SX), int(y * SY)) for x, y in hand_data[0]['points']]
                     wx, wy = pts[0]
                     dist = _dist((wx, wy), (menu_cx, menu_cy))
 
-                    if dist > 40:
+                    if dist > MENU['open_deadzone']:
                         hovered_idx = _hovered_option_dynamic(
                             wx, wy, menu_cx, menu_cy,
-                            menu_rotation, MENU_OPTIONS)
+                            menu_rotation_frozen, MENU_OPTIONS)
                     else:
                         hovered_idx = -1
 
                     _draw_dynamic_menu(display, menu_cx, menu_cy,
                                        hovered_idx, wx, wy,
-                                       menu_rotation,
+                                       menu_rotation_frozen,
                                        MENU_OPTIONS)
 
                     if not poing:
@@ -716,29 +570,31 @@ def main():
 
             elif action == "Mouse":
                 action = None
+                cv2.destroyAllWindows()
                 virt_mouse.run_mouse_mode(cam, det)
-                menu_phase  = 0
+                menu_phase = 0
                 hovered_idx = -1
 
             elif action == "Glob":
                 action = None
+                cv2.destroyAllWindows()
                 glob_metal.run_glob_mode(cam, det)
-                menu_phase  = 0
+                menu_phase = 0
                 hovered_idx = -1
 
             elif action == "Shapes":
-                action        = None
+                action = None
                 shapes_active = True
-                menu_phase    = -1
+                menu_phase = -1
 
             # ── Shapes mode ──────────────────────────────────────────────────────
-            if shapes_active and hand_data:   # FIX: guard hand_data vide
+            if shapes_active and hand_data:
                 # ── Double-fist → back to menu ───────────────────────────────────
                 if gest.check_double_fist(hand_data, double_fist_counter):
-                    shapes_active      = False
-                    menu_phase         = 0
-                    shape_menu_phase   = 0
-                    shape_hovered_idx  = -1
+                    shapes_active = False
+                    menu_phase = 0
+                    shape_menu_phase = 0
+                    shape_hovered_idx = -1
                     last_touched_shape = None
 
                 gest.draw_double_fist_hint(display, double_fist_counter)
@@ -757,46 +613,47 @@ def main():
                 active_pinches = []
                 fists = []
                 for hi, hand in enumerate(hand_data):
-                    pts     = hand['points']
-                    tx  = int(pts[4][0]*SX);  ty = int(pts[4][1]*SY)
-                    ix  = int(pts[8][0]*SX);  iy = int(pts[8][1]*SY)
-                    ccx = (tx+ix)//2;         ccy = (ty+iy)//2
-                    is_fist  = hand['gestes']['poing']
+                    pts = hand['points']
+                    tx = int(pts[4][0] * SX);  ty = int(pts[4][1] * SY)
+                    ix = int(pts[8][0] * SX);  iy = int(pts[8][1] * SY)
+                    ccx = (tx + ix) // 2;      ccy = (ty + iy) // 2
+                    is_fist = hand['gestes']['poing']
                     is_pinch = hand['gestes']['pincement']
                     if is_pinch or is_fist:
-                        active_pinches.append((ccx, ccy, is_fist, hi))
+                        active_pinches.append((ccx, ccy, is_fist, hand['id']))
                         cv2.circle(display, (ccx, ccy), 8,
-                                   (0,0,255) if is_fist else (0,255,0), -1)
+                                   (0, 0, 255) if is_fist else (0, 255, 0), -1)
                     if is_fist:
-                        fists.append((ccx, ccy, hi))
+                        fists.append((ccx, ccy, hand['id']))
 
                 # 2. Gestion de l'état "saisie" des formes
+                #    FIX: verrouillage par ID STABLE (main_detect) et non par index
+                #    MediaPipe, ce qui évite de suivre la mauvaise main quand les
+                #    indices sont permutés d'un frame à l'autre.
+                hand_by_id = {hand['id']: hand for hand in hand_data}
                 for shape in shapes:
                     shape.pinches = []
                     if shape.locked_hand_id is not None:
                         lid = shape.locked_hand_id
-                        # FIX: vérifie que l'index est encore valide
-                        if lid < len(hand_data):
-                            if hand_data[lid]['gestes']['poing']:
-                                pts = hand_data[lid]['points']
-                                tx  = int(pts[4][0]*SX);  ty = int(pts[4][1]*SY)
-                                ix  = int(pts[8][0]*SX);  iy = int(pts[8][1]*SY)
-                                ccx = (tx+ix)//2;         ccy = (ty+iy)//2
-                                shape.pinches.append((ccx, ccy, True))
-                            else:
-                                shape.locked_hand_id = None
+                        hand = hand_by_id.get(lid)
+                        if hand is not None and hand['gestes']['poing']:
+                            pts = hand['points']
+                            tx = int(pts[4][0] * SX);  ty = int(pts[4][1] * SY)
+                            ix = int(pts[8][0] * SX);  iy = int(pts[8][1] * SY)
+                            ccx = (tx + ix) // 2;      ccy = (ty + iy) // 2
+                            shape.pinches.append((ccx, ccy, True))
                         else:
                             shape.locked_hand_id = None
 
-                for (px, py, is_fist, hi) in active_pinches:
+                for (px, py, is_fist, hid) in active_pinches:
                     for shape in shapes:
-                        if shape.locked_hand_id == hi:
+                        if shape.locked_hand_id == hid:
                             continue
-                        if _dist((px,py),(shape.x,shape.y)) < shape.radius * 1.5:
+                        if _dist((px, py), (shape.x, shape.y)) < shape.radius * GRAB_RANGE:
                             shape.pinches.append((px, py, is_fist))
                             if is_fist:
-                                shape.locked_hand_id = hi
-                            last_touched_shape = shape   # track for spread gesture
+                                shape.locked_hand_id = hid
+                            last_touched_shape = shape  # track for spread gesture
                             break
 
                 # 3. Menu radial shapes
@@ -805,24 +662,24 @@ def main():
                 if shape_menu_phase == 0:
                     if fists and not grabbing_something and len(shapes) < MAX_SHAPES:
                         fx, fy, _ = fists[0]
-                        too_close = any(_dist((fx,fy),(s.x,s.y)) < s.radius * 2
+                        too_close = any(_dist((fx, fy), (s.x, s.y)) < s.radius * SPAWN_DIST
                                         for s in shapes)
                         if not too_close:
                             shape_menu_cx, shape_menu_cy = fx, fy
                             shape_menu_phase = 1
                             shape_hovered_idx = -1
                             # FIX: geler la rotation à l'ouverture
-                            pass  # rotation non gelée
+                            shape_menu_rotation_frozen = shape_menu_rotation
 
                 elif shape_menu_phase == 1:
                     if fists:
                         fx, fy, _ = fists[0]
-                        dist = _dist((fx,fy),(shape_menu_cx, shape_menu_cy))
-                        if dist > 40:
+                        dist = _dist((fx, fy), (shape_menu_cx, shape_menu_cy))
+                        if dist > MENU['open_deadzone']:
                             shape_hovered_idx = _hovered_option_dynamic(
                                 fx, fy,
                                 shape_menu_cx, shape_menu_cy,
-                                shape_menu_rotation,
+                                shape_menu_rotation_frozen,
                                 SHAPE_OPTIONS)
                         else:
                             shape_hovered_idx = -1
@@ -831,9 +688,9 @@ def main():
                             display,
                             shape_menu_cx, shape_menu_cy,
                             shape_hovered_idx, fx, fy,
-                            shape_menu_rotation,
+                            shape_menu_rotation_frozen,
                             SHAPE_OPTIONS,
-                            icon_drawers=_SHAPE_ICON_DRAWERS) # icônes formes
+                            icon_drawers=_SHAPE_ICON_DRAWERS)  # icônes formes
 
                     else:
                         if shape_hovered_idx != -1:
@@ -842,7 +699,7 @@ def main():
                             if ShapeClass is not None:
                                 shapes.append(ShapeClass(
                                     shape_menu_cx, shape_menu_cy, default_radius))
-                        shape_menu_phase  = 0
+                        shape_menu_phase = 0
                         shape_hovered_idx = -1
 
                 # 4. Suppression par triple pincement
@@ -850,7 +707,7 @@ def main():
                     pinched = len(shape.pinches) > 0
                     if pinched and not shape.was_pinched_last_frame:
                         shape.pinch_count = (shape.pinch_count + 1
-                                             if now - shape.last_pinch_time < 0.75
+                                             if now - shape.last_pinch_time < TRIPLE_WINDOW
                                              else 1)
                         shape.last_pinch_time = now
                         if shape.pinch_count >= 3:
@@ -860,14 +717,14 @@ def main():
 
                 # 5. Physique et dessin
                 for shape in shapes:
-                    _update_shape_physics(shape, LISSAGE)
+                    _update_shape_physics(shape)
                     shape.draw(display)
 
             elif shapes_active:
                 # Pas de main détectée mais shapes_active : on dessine quand même
                 for shape in shapes:
                     shape.pinches = []
-                    _update_shape_physics(shape, LISSAGE)
+                    _update_shape_physics(shape)
                     shape.draw(display)
 
             cv2.imshow("Vision AI", display)

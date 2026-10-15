@@ -1,11 +1,21 @@
-# Core dependencies for the Computer-Vision project (Python 3.12)
+# Core dependencies for the Computer-Vision project (Python 3.10 – 3.12)
 #
-# Install with:
-#   .venv312\Scripts\pip install --index-url https://mirrors.aliyun.com/pypi/simple/ --trusted-host mirrors.aliyun.com -r requirements.txt
+# Install (Linux):
+#   python3 -m venv .venv
+#   .venv/bin/pip install -r requirements.txt
 #
-# NOTE: use opencv-contrib-python, NOT opencv-python-headless.
-# mediapipe already depends on opencv-contrib-python, which provides the cv2
-# module. Installing opencv-python-headless on top of it leaves a broken cv2
-# directory (no __init__.py, no cvtColor) — they share the same cv2/ folder.
-
+# Install (Windows):
+#   python -m venv .venv312
+#   .venv312\Scripts\pip install -r requirements.txt
+#
+# NOTE: mediapipe pulls in opencv-contrib-python and numpy automatically.
+#       Do NOT install opencv-python or opencv-python-headless on top of
+#       opencv-contrib-python — they share the cv2/ folder and break each other.
 mediapipe==1.1.0
+opencv-contrib-python>=4.10
+numpy>=1.26
+
+# Mouse control (virt_mouse.py). On Wayland, pynput does not work — install
+# ydotool + ydotoold instead (see virt_mouse.py header). On X11 pynput is used.
+# evdev (pynput's Linux backend) needs:  sudo apt install python3-dev
+pynput>=1.7  # x11 on Linux, native on Windows/macOS
