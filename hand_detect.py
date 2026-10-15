@@ -161,7 +161,7 @@ def _match_ids(raw_landmarks, states: dict, w: int, h: int) -> list:
     from the next frame onward).
     Returns a list of _HandState in the same order as raw_landmarks.
     """
-    cur_wrist = [(raw_lm.landmarks[0].x * w, raw_lm.landmarks[0].y * h) for raw_lm in raw_landmarks]
+    cur_wrist = [(raw_lm[0].x * w, raw_lm[0].y * h) for raw_lm in raw_landmarks]
     prev = [(sid, st._last_wrist) for sid, st in states.items()]
 
     matched = []
@@ -183,7 +183,7 @@ def _match_ids(raw_landmarks, states: dict, w: int, h: int) -> list:
             matched.append(st)
     # ── Set _last_wrist for ALL matched hands (including newly created ones) ────
     for state, raw_lm in zip(matched, raw_landmarks):
-        state._last_wrist = (raw_lm.landmarks[0].x * w, raw_lm.landmarks[0].y * h)
+        state._last_wrist = (raw_lm[0].x * w, raw_lm[0].y * h)
     return matched
 
 
