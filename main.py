@@ -7,18 +7,20 @@ Architecture :
   main loop         → state machine : menu / shapes / mouse / glob
 """
 import math
+import sys
 import threading
 import time
 
 import cv2
 import numpy as np
+import setup_check
 
 import gestures as gest
 import glob_metal
 import virt_mouse
 import td_render as td
 from hand_detect import hand_detect, release
-from config import CAM, MENU, SHAPES, PHYSICS
+from config import CAM, MENU, SHAPES, PHYSICS, GESTURE
 from shapes_3d import MatrixSphere3D, MatrixPyramid3D
 
 DETECT_W,  DETECT_H  = CAM['detect_w'],  CAM['detect_h']
@@ -271,6 +273,60 @@ def _draw_dynamic_menu(img, cx, cy, hovered, cursor_x, cursor_y,
         cv2.circle(img, (cursor_x, cursor_y), 8, (255, 255, 255), -1, cv2.LINE_AA)
 
 
+def _draw_fps(img, fps, mode, hand_count, shapes_count=0):
+    """HUD: FPS, current mode, hand count, shape count."""
+    h, w = img.shape[:2]
+    font, scale = cv2.FONT_HERSHEY_SIMPLEX, 0.32
+    pad, line_h = 8, 14
+
+    # Background panel (semi-transparent dark)
+    panel_w, panel_h = 180, line_h * 4 + pad * 3
+    cv2.rectangle(img, (0, 0), (panel_w, panel_h), (10, 10, 10), -1)
+    cv2.rectangle(img, (0, 0), (panel_w, panel_h), (60, 60, 60), 1, cv2.LINE_AA)
+
+    # FPS (green if good, yellow if okay, red if low)
+    fps_color = (0, 255, 0) if fps >= 30 else (255, 255, 0) if fps >= 15 else (0, 100, 255)
+    cv2.putText(img, f"fps  {fps:.0f}", (pad, pad + line_h), font, scale, fps_color, 1, cv2.LINE_AA)
+
+    # Mode indicator
+    mode_color = (180, 180, 255) if mode == "menu" else (255, 200, 100) if mode == "shapes" else (100, 200, 255) if mode == "mouse" else (100, 255, 200)
+    cv2.putText(img, f"mode {mode}", (pad, pad + line_h * 2), font, scale, mode_color, 1, cv2.LINE_AA)
+
+    # Hands / shapes
+    cv2.putText(img, f"hands {hand_count}", (pad, pad + line_h * 3), font, scale, (180, 180, 180), 1, cv2.LINE_AA)
+    if shapes_count > 0:
+        cv2.putText(img, f"shapes {shapes_count}", (pad, pad + line_h * 4), font, scale, (180, 180, 180), 1, cv2.LINE_AA)
+
+
+def _draw_gesture_hints(img, poing, pincement, double_fist_progress, spawn_cooldown_remaining):
+    """Show gesture feedback in bottom-center."""
+    h, w = img.shape[:2]
+    font, scale = cv2.FONT_HERSHEY_SIMPLEX, 0.30
+    y_base = h - 40
+
+    hints = []
+    if poing:
+        hints.append(("FIST", (180, 180, 255)))
+    if pincement:
+        hints.append(("PINCH", (100, 255, 150)))
+    if double_fist_progress > 0:
+        hints.append((f"DUAL {int(double_fist_progress*100)}%", (255, 200, 100)))
+    if spawn_cooldown_remaining > 0:
+        hints.append((f"CD {spawn_cooldown_remaining:.0f}", (150, 150, 150)))
+
+    if not hints:
+        return
+
+    # Center the hints
+    total_w = sum(cv2.getTextSize(h[0], font, scale, 1)[0][0] + 8 for h in hints) + 16
+    x_start = max(8, (w - total_w) // 2)
+
+    for label, color in hints:
+        (tw, th), _ = cv2.getTextSize(label, font, scale, 1)
+        cv2.putText(img, label, (x_start, y_base), font, scale, color, 1, cv2.LINE_AA)
+        x_start += tw + 16
+
+
 def _draw_hint(img):
     h, w = img.shape[:2]
     hint = "close fist to open radial menu"
@@ -465,6 +521,11 @@ SPAWN_DIST    = SHAPES['spawn_min_dist_mult']
 MAX_SHAPES    = SHAPES['max_shapes']
 
 
+# ── Pre-flight check ──────────────────────────────────────────────────────────
+if not setup_check.check():
+    sys.exit(1)
+
+
 def main():
     global _menu_sphere_ay, _menu_sphere_ax, _menu_pyramid_ay, _menu_pyramid_ax
 
@@ -499,6 +560,12 @@ def main():
     while cam.read() is None:
         time.sleep(0.01)
 
+    # ── FPS tracking ────────────────────────────────────────────────────────────
+    fps_frames = 0
+    fps_time = time.monotonic()
+    current_fps = 0
+    spawn_cooldown_frames = 0  # visual cooldown for shape spawn
+
     try:
         while True:
             frame = cam.read()
@@ -512,6 +579,18 @@ def main():
                       if res_frame is not None else frame
 
             now = time.time()
+
+            # ── FPS calculation ─────────────────────────────────────────────────
+            fps_frames += 1
+            fps_now = time.monotonic()
+            if fps_now - fps_time >= 0.5:
+                current_fps = fps_frames / (fps_now - fps_time)
+                fps_frames = 0
+                fps_time = fps_now
+
+            # ── Spawn cooldown decrement ────────────────────────────────────────
+            if spawn_cooldown_frames > 0:
+                spawn_cooldown_frames -= 1
 
             # ── Animation des icônes 3D dans les menus ───────────────────────────
             _menu_sphere_ay = (_menu_sphere_ay + 0.04) % (2 * math.pi)
@@ -699,6 +778,7 @@ def main():
                             if ShapeClass is not None:
                                 shapes.append(ShapeClass(
                                     shape_menu_cx, shape_menu_cy, default_radius))
+                                spawn_cooldown_frames = 30  # half-second cooldown visual
                         shape_menu_phase = 0
                         shape_hovered_idx = -1
 
@@ -727,6 +807,20 @@ def main():
                     _update_shape_physics(shape)
                     shape.draw(display)
 
+            # ── HUD overlay ─────────────────────────────────────────────────────
+            _draw_fps(display, current_fps,
+                      "menu" if menu_phase >= 0 else ("shapes" if shapes_active else "?"),
+                      len(hand_data) if hand_data else 0,
+                      len(shapes) if shapes_active else 0)
+            if hand_data:
+                _draw_gesture_hints(display,
+                                    hand_data[0]['gestes']['poing'],
+                                    hand_data[0]['gestes']['pincement'],
+                                    double_fist_counter[0] / GESTURE['double_fist_frames'] if hand_data else 0,
+                                    spawn_cooldown_frames)
+            elif shapes_active:
+                _draw_gesture_hints(display, False, False, 0, spawn_cooldown_frames)
+
             cv2.imshow("Vision AI", display)
             if cv2.waitKey(1) == 27:
                 break
@@ -741,3 +835,8 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+# ── Pre-flight check (runs before main loop) ──────────────────────────────────
+import setup_check
+if not setup_check.check():
+    sys.exit(1)
