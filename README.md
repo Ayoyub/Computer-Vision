@@ -14,13 +14,25 @@ Hand-controlled virtual reality on a plain webcam — built for HackClub StarDan
 
 ## Run
 ```bash
+# Clone & enter
+git clone https://github.com/Ayoyub/Computer-Vision
+cd Computer-Vision
+
+# Install deps once
+uv sync
+
+# Run
+uv run python main.py
+```
+
+Or without `uv` (using venv):
+```bash
 python3 -m venv .venv
 .venv/bin/pip install -r requirements.txt
 .venv/bin/python main.py
 ```
 
-The MediaPipe model (`hand_landmarker.task`, ~7.5 MB) is downloaded
-automatically on first launch.
+The MediaPipe model (`hand_landmarker.task`, ~7.5 MB) is downloaded automatically on first launch.
 
 ### Mouse mode on Wayland
 `pynput` only works on X11. For Wayland (KDE Plasma / GNOME) use ydotool:
@@ -36,6 +48,16 @@ systemctl --user enable --now ydotoold
 ```
 
 The app auto-detects: ydotool → pynput → none.
+
+### Windows
+```cmd
+git clone https://github.com/Ayoyub/Computer-Vision
+cd Computer-Vision
+uv sync
+uv run python main.py
+```
+
+Mouse input uses pynput natively on Windows (no ydotool needed).
 
 ## Project layout
 ```
