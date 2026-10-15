@@ -9,8 +9,8 @@ dependencies = [
     "numpy>=1.26",
 ]
 
-[project.optional-dependencies]
-mouse = ["pynput>=1.7"]  # X11 fallback only; on Wayland use ydotool instead
+[dependency-groups]
+dev = []
 
-[tool.uv]
-dev-dependencies = []
+[project.optional-dependencies]
+mouse = ["pynput>=1.7"]
