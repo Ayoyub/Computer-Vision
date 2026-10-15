@@ -521,8 +521,8 @@ SPAWN_DIST    = SHAPES['spawn_min_dist_mult']
 MAX_SHAPES    = SHAPES['max_shapes']
 
 
-# ── Pre-flight check ──────────────────────────────────────────────────────────
-if not setup_check.check():
+# ── Pre-flight check (only when run directly, not when imported by tests) ────
+if __name__ == '__main__' and not setup_check.check():
     sys.exit(1)
 
 
