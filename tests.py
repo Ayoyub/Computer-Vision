@@ -186,9 +186,9 @@ class FL:
         self.y = y
 
 
-class FH:
+class FH(list):
     def __init__(self, x, y):
-        self.landmarks = [FL(x, y)]
+        super().__init__([FL(x, y)])
 
 
 # Stable hand identity: same hand across frames
