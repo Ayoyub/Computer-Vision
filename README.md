@@ -25,29 +25,27 @@ uv sync
 uv run python main.py
 ```
 
-Or without `uv` (using venv):
-```bash
-python3 -m venv .venv
-.venv/bin/pip install -r requirements.txt
-.venv/bin/python main.py
-```
-
 The MediaPipe model (`hand_landmarker.task`, ~7.5 MB) is downloaded automatically on first launch.
 
-### Mouse mode on Wayland
-`pynput` only works on X11. For Wayland (KDE Plasma / GNOME) use ydotool:
+### Optional: mouse mode extras
+Mouse mode needs an input backend. On Linux it tries ydotool first (Wayland + X11), then pynput (X11 only). If you want pynput as a fallback:
+```bash
+uv sync --extra mouse
+```
+On macOS and Windows pynput works out of the box.
 
+### Mouse mode on Wayland
+For native Wayland input, use ydotool instead of pynput:
 ```bash
 # Fedora / Nobara
-sudo dnf install ydotool
-sudo udevadm control --reload-rules && sudo udevadm trigger
-# grant your user access to /dev/uinput without root:
-sudo bash -c 'echo "KERNEL==\"uinput\", MODE=\"0666\"" > /etc/udev/rules.d/99-uinput.rules'
+sudo -S -p '' dnf install ydotool
+sudo -S -p '' udevadm control --reload-rules && sudo -S -p '' udevadm trigger
+sudo -S -p '' bash -c 'echo "KERNEL==\"uinput\", MODE=\"0666\"" > /etc/udev/rules.d/99-uinput.rules'
 # reboot (or re-login), then:
 systemctl --user enable --now ydotoold
 ```
 
-The app auto-detects: ydotool → pynput → none.
+The app auto-detects: ydotool → pynput → none (mouse mode disabled gracefully).
 
 ### Windows
 ```cmd
@@ -56,8 +54,7 @@ cd Computer-Vision
 uv sync
 uv run python main.py
 ```
-
-Mouse input uses pynput natively on Windows (no ydotool needed).
+Mouse input uses pynput natively on Windows (no extra setup).
 
 ## Project layout
 ```
