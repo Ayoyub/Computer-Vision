@@ -347,6 +347,9 @@ class CameraStream:
         self.cap = cv2.VideoCapture(src)
         self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, width)
         self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, height)
+        # Request a higher frame rate for finer temporal sampling (ignored if
+        # the camera can't do it).
+        self.cap.set(cv2.CAP_PROP_FPS, CAM.get('camera_fps', 60))
         self.cap.set(cv2.CAP_PROP_BUFFERSIZE, CAM['buffer_size'])
         self.frame = None
         self.lock = threading.Lock()
@@ -523,6 +526,22 @@ MAX_SHAPES    = SHAPES['max_shapes']
 
 def main():
     global _menu_sphere_ay, _menu_sphere_ax, _menu_pyramid_ay, _menu_pyramid_ax
+    global DETECT_W, DETECT_H
+
+    # ── Auto detection resolution ─────────────────────────────────────────────
+    # Pick the finest detection resolution the machine can sustain.
+    # Runs BEFORE the camera stream so it can use the camera without a second
+    # (conflicting) handle.
+    if CAM.get('detect_auto', False):
+        base_wh = (CAM['detect_w'], CAM['detect_h'])
+        hi_wh   = (CAM['detect_hi_w'], CAM['detect_hi_h'])
+        budget  = CAM['detect_latency_budget_ms']
+        DETECT_W, DETECT_H, _ms, label = hand_detect.pick_detect_resolution(
+            CAM['source'], base_wh, hi_wh, budget)
+        print(f"Detection resolution: {DETECT_W}x{DETECT_H} ({label})")
+    else:
+        DETECT_W, DETECT_H = CAM['detect_w'], CAM['detect_h']
+        print(f"Detection resolution: {DETECT_W}x{DETECT_H} (fixed)")
 
     cam = CameraStream(CAM['source'], DISPLAY_W, DISPLAY_H)
     det = DetectionThread()

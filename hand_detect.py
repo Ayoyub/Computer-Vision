@@ -53,6 +53,67 @@ _landmarker = vision.HandLandmarker.create_from_options(
 )
 
 # ── Skeleton topology ────────────────────────────────────────────────────────────
+# ── Auto-quality: pick the finest detection resolution the machine can sustain ─
+def _benchmark_latency(landmarker, w: int, h: int, src, samples: int = 6) -> float:
+    """
+    Return median inference latency (ms) of `landmarker` at resolution (w, h),
+    measured on real frames from camera `src`. Falls back to synthetic frames
+    if the camera can't be read.
+    """
+    import cv2
+    cap = cv2.VideoCapture(src)
+    cap.set(cv2.CAP_PROP_FRAME_WIDTH, w)
+    cap.set(cv2.CAP_PROP_FRAME_HEIGHT, h)
+
+    times = []
+    ts = 0
+    for _ in range(samples):
+        ok, frame = cap.read()
+        if not ok:
+            frame = (np.random.randint(0, 255, (h, w, 3), dtype=np.uint8))
+        rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+        mp_img = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb)
+        ts += 33
+        t0 = time.monotonic()
+        landmarker.detect_for_video(mp_img, ts)
+        times.append((time.monotonic() - t0) * 1000.0)
+    cap.release()
+    times.sort()
+    return times[len(times) // 2]  # median
+
+
+def pick_detect_resolution(src, base_wh, hi_wh, budget_ms, quiet=False):
+    """
+    Decide which detection resolution to use.
+      - Tries the finer (hi) resolution first.
+      - If its median latency fits under `budget_ms`, use it.
+      - Otherwise fall back to `base_wh`.
+    Returns (w, h, latency_ms, chosen_label).
+    """
+    bw, bh = base_wh
+    hw, hh = hi_wh
+
+    # If the camera can't even deliver the hi resolution, no point benchmarking it.
+    if (hw, hh) == (bw, bh):
+        return bw, bh, 0.0, 'native'
+
+    if not quiet:
+        print(f"  benchmarking detection: hi {hw}x{hh} ...")
+    try:
+        hi_ms = _benchmark_latency(_landmarker, hw, hh, src)
+    except Exception as e:
+        return bw, bh, 0.0, f'error:{e}'
+
+    if hi_ms <= budget_ms:
+        if not quiet:
+            print(f"  -> {hw}x{hh} ({hi_ms:.1f} ms median) — within budget")
+        return hw, hh, hi_ms, 'hi'
+    else:
+        if not quiet:
+            print(f"  -> hi too slow ({hi_ms:.1f} ms > {budget_ms} ms) — using {bw}x{bh}")
+        return bw, bh, hi_ms, 'base'
+
+
 _CONNECTIONS = [
     (0,1),(1,2),(2,3),(3,4),
     (0,5),(5,6),(6,7),(7,8),

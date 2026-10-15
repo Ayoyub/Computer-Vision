@@ -6,8 +6,21 @@ CAM = {
     'source': 0,
     'display_w': 1280,
     'display_h': 720,
+
+    # ── Détection ──────────────────────────────────────────────────────────────
+    # Résolution de détection de base (640x360).
+    # Si detect_auto=True, un benchmark au démarrage teste la résolution
+    # supérieure (detect_hi_w/h) et choisit la plus fine que la machine
+    # peut tenir sous le budget de latence (detect_latency_budget_ms).
     'detect_w': 640,
     'detect_h': 360,
+    'detect_auto': True,
+    'detect_hi_w': 1280,
+    'detect_hi_h': 720,
+    'detect_latency_budget_ms': 25,
+
+    # Demander 60 fps à la caméra (silencieusement ignoré si non supporté)
+    'camera_fps': 60,
     'buffer_size': 1,
 }
 
