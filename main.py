@@ -521,11 +521,6 @@ SPAWN_DIST    = SHAPES['spawn_min_dist_mult']
 MAX_SHAPES    = SHAPES['max_shapes']
 
 
-# ── Pre-flight check (only when run directly, not when imported by tests) ────
-if __name__ == '__main__' and not setup_check.check():
-    sys.exit(1)
-
-
 def main():
     global _menu_sphere_ay, _menu_sphere_ax, _menu_pyramid_ay, _menu_pyramid_ax
 
@@ -834,6 +829,8 @@ def main():
 
 
 if __name__ == "__main__":
+    if not setup_check.check():
+        sys.exit(1)
     main()
 
 # ── Pre-flight check (runs before main loop) ──────────────────────────────────
