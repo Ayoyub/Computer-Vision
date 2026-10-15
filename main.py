@@ -19,7 +19,8 @@ import gestures as gest
 import glob_metal
 import virt_mouse
 import td_render as td
-from hand_detect import hand_detect, release
+import hand_detect as hand_detect_mod
+from hand_detect import hand_detect, release, pick_detect_resolution
 from config import CAM, MENU, SHAPES, PHYSICS, GESTURE
 from shapes_3d import MatrixSphere3D, MatrixPyramid3D
 
@@ -536,7 +537,7 @@ def main():
         base_wh = (CAM['detect_w'], CAM['detect_h'])
         hi_wh   = (CAM['detect_hi_w'], CAM['detect_hi_h'])
         budget  = CAM['detect_latency_budget_ms']
-        DETECT_W, DETECT_H, _ms, label = hand_detect.pick_detect_resolution(
+        DETECT_W, DETECT_H, _ms, label = pick_detect_resolution(
             CAM['source'], base_wh, hi_wh, budget)
         print(f"Detection resolution: {DETECT_W}x{DETECT_H} ({label})")
     else:
