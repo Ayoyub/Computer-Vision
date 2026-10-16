@@ -143,8 +143,8 @@ print(f"11. Config: all {len(keys)} keys wired into live code OK")
 
 # Render smoke
 disp = np.full((720, 1280, 3), 20, np.uint8)
-main._draw_dynamic_menu(disp, 640, 360, 1, 700, 300, 30.0, main.MENU_OPTIONS)
-main._draw_dynamic_menu(disp, 400, 400, 0, 450, 350, 10.0, main.SHAPE_OPTIONS,
+main._draw_dynamic_menu(disp, 640, 360, 1, 0.0, main.MENU_OPTIONS)
+main._draw_dynamic_menu(disp, 400, 400, 0, 0.0, main.SHAPE_OPTIONS,
                           icon_drawers=main._SHAPE_ICON_DRAWERS)
 shapes_3d.MatrixSphere3D(800, 300, 60).draw(disp)
 shapes_3d.MatrixPyramid3D(200, 200, 60).draw(disp)
