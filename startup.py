@@ -271,13 +271,20 @@ def _probe_cameras(max_idx: int = 8) -> list:
     found = []
     for i in range(max_idx):
         cap = cv2.VideoCapture(i)
-        ok = cap.isOpened()
-        if ok:
+        if not cap.isOpened():
+            cap.release()
+            continue
+        # V4L2 devices often fail the first read after open — retry
+        ok = False
+        for _ in range(5):
             ok, _ = cap.read()
+            if ok:
+                break
+            time.sleep(0.1)
         cap.release()
-        time.sleep(0.05)
         if ok:
             found.append(i)
+        time.sleep(0.1)  # let the device settle before next probe
     return found
 
 
@@ -366,22 +373,12 @@ def run_startup() -> bool:
     smoother = LandmarkSmoother()
     fps_frames, fps_time, current_fps = 0, time.monotonic(), 0.0
 
-    # Probe for available cameras
-    available = _probe_cameras()
-    if not available:
-        print("ERROR: no camera detected. Use --settings to pick a source.")
-        return False
-    print(f"Detected cameras: {available}")
-
-    # Open camera with retry
+    # Open camera with retry (probe loop causes V4L2 device contention)
     cap = _open_camera(CAM['source'], CAM['display_w'], CAM['display_h'],
                        CAM.get('camera_fps', 60))
     if cap is None:
-        # Fall back to first available
-        cap = _open_camera(available[0], CAM['display_w'], CAM['display_h'],
-                           CAM.get('camera_fps', 60))
-    if cap is None:
-        print("ERROR: could not open camera.")
+        print(f"ERROR: could not open camera {CAM['source']}. "
+              "Use --settings to pick a different source.")
         return False
 
     print("Startup: hold your hand in front of the camera. Press SPACE to calibrate.")
