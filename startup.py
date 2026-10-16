@@ -128,11 +128,14 @@ def _draw_feedback(img, state, hand_data):
             xs += tw + 16
 
         # Landmarks (white = fingertips, cyan = rest)
-        for i, (px, py) in enumerate(pts[:21]):
+        for i, raw_pt in enumerate(pts[:21]):
+            px, py = int(raw_pt[0]), int(raw_pt[1])
             c = (255, 255, 255) if i in {4, 8, 12, 16, 20} else (0, 200, 255)
             cv2.circle(img, (px, py), 3, c, -1, cv2.LINE_AA)
         for a, b in hand_detect_mod._CONNECTIONS:
-            cv2.line(img, pts[a], pts[b], (0, 150, 200), 1, cv2.LINE_AA)
+            pa = pts[a]; pb = pts[b]
+            cv2.line(img, (int(pa[0]), int(pa[1])), (int(pb[0]), int(pb[1])),
+                     (0, 150, 200), 1, cv2.LINE_AA)
     else:
         cv2.putText(img,
                     "No hand detected — hold your hand in front of the camera",
