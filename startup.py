@@ -207,7 +207,7 @@ def _draw_feedback(img, state, pts, poing, pinch, hand_count, fps):
     cv2.line(img, (pad + 8, ty), (pad + nw - 8, ty), (60, 60, 60), 1, cv2.LINE_AA)
     ty += lh
 
-    # Action hint
+    # ── Action hint ─────────────────────────────────────────────────────────────────────
     if state.calibrated:
         cv2.putText(img, "✓ READY — SPACE to launch",
                     (pad + 10, ty), font, 0.50, (80, 255, 120), 1, cv2.LINE_AA)
@@ -379,6 +379,18 @@ def run_startup() -> bool:
             state.prev_key = 32
             if not state.calibrated:
                 _run_calibration(state, cap)
+                # The benchmark opens a second V4L2 handle on the same camera,
+                # which can seize the device on Linux — re-acquire the capture.
+                cap.release()
+                cap = cv2.VideoCapture(CAM['source'])
+                cap.set(cv2.CAP_PROP_FRAME_WIDTH,  CAM['display_w'])
+                cap.set(cv2.CAP_PROP_FRAME_HEIGHT, CAM['display_h'])
+                cap.set(cv2.CAP_PROP_FPS, CAM.get('camera_fps', 60))
+                # Flush stale key events queued during calibration, otherwise a
+                # SPACE pressed mid-calibration swallows the launch press.
+                state.prev_key = None
+                while cv2.waitKey(1) & 0xFF:
+                    pass
             else:
                 # Apply tuned params
                 HAND['fist_min_folded'] = state.fist_min_folded

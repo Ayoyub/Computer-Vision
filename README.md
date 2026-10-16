@@ -2,15 +2,38 @@
 
 Hand-controlled virtual reality on a plain webcam — built for HackClub StarDance Challenge 2026.
 
+### Startup calibration
+
+On every launch a calibration screen appears first (same TouchDesigner
+look as the main app). It shows your hand with live FIST / PINCH
+detection so you can verify the model sees you correctly:
+
+| Step | Action |
+|---|---|
+| 1 | Show your hand to the camera — the HUD shows `fist` / `pinch` state live |
+| 2 | **SPACE** — runs hand-scale calibration + detection benchmark (~5 s, hold still) |
+| 3 | Adjust if the model misses your gestures: **↑/↓** = `fist_min_folded` (2 = easy, 3 = default, 4 = strict), **←/→** = pinch on/off ratio (lower = more sensitive) |
+| 4 | **SPACE** again (a fresh press, after `✓ READY` appears) — launches the main app |
+
+`ESC` quits at any point. Tuned values apply for the current session.
+
+## Menu — invisible 3D carousel
+
+**Double fist** (both hands closed at once) opens the carousel: the
+options float around a tilted 3D ring, the one nearest your wrist is
+largest and brightest. **Point your wrist** to bring an option to the
+front, **pinch to select**, double fist again to close without
+selecting. The shapes menu uses the same interaction.
+
 ## Modes
 | Menu option | What it does |
 |---|---|
-| **Shapes** | Spawn & throw 3D wireframe shapes (sphere / pyramid). Pinch = grab, fist = rotate, 2 hands = scale & move, triple pinch = delete, 2-hand scissor spread = rotation speed. |
+| **Shapes** | Spawn & throw 3D wireframe shapes (sphere / pyramid). Pinch = grab, fist = rotate, 2 hands = scale & move, triple pinch = delete, 2-hand scissor spread = rotation speed. Double fist opens the shape-spawn carousel. |
 | **Mouse** | Your index finger drives the system cursor; pinch = click. `C` = recalibrate the active zone. |
 | **Glob** | Liquid-metal metaball blob you can push (open hand), attract (fist) and split (pinch). |
 | **Quit** | Exit. |
 
-**Double fist = back to the radial menu** in every mode. `ESC` = menu / quit.
+**Double fist = open carousel / back to the menu** in every mode. `ESC` = menu / quit.
 
 ### Settings GUI
 ```bash
@@ -71,6 +94,7 @@ Mouse input uses pynput natively on Windows (no extra setup).
 ## Project layout
 ```
 main.py          — radial menu + state machine + shapes mode
+startup.py       — startup calibration screen (same TD aesthetic as main app)
 shapes_3d.py     — interactive 3D wireframe shapes (TouchDesigner bloom)
 hand_detect.py   — MediaPipe detection, stable hand IDs, gestures
 kalman_filter.py — One Euro filter (best-in-class jitter/lag tradeoff)
