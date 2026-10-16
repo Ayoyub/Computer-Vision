@@ -12,6 +12,14 @@ Hand-controlled virtual reality on a plain webcam — built for HackClub StarDan
 
 **Double fist = back to the radial menu** in every mode. `ESC` = menu / quit.
 
+### Settings GUI
+```bash
+uv run python main.py --settings
+```
+Opens a tkinter configurator to pick your camera, frame rate, display +
+detection resolution, and smoothing. Saved to
+`~/.config/computer-vision/settings.json` and applied on every launch.
+
 ## Run
 ```bash
 # Clone & enter
@@ -20,6 +28,10 @@ cd Computer-Vision
 
 # Install deps once
 uv sync
+
+# Configure (optional): pick camera, frame rate, display + detection
+# resolution, and smoothing. Saves to ~/.config/computer-vision/settings.json
+uv run python main.py --settings
 
 # Run
 uv run python main.py
@@ -67,6 +79,8 @@ virt_mouse.py    — cursor control (ydotool / pynput backend)
 glob_metal.py    — liquid-metal metaball simulation
 td_render.py     — shared bloom / emission rendering pipeline
 config.py        — every tunable constant lives here
+settings.py      — user settings persistence (JSON, applied on import)
+settings_gui.py  — tkinter configurator (--settings flag)
 ```
 
 ## Why these algorithms?

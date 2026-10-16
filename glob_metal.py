@@ -6,9 +6,12 @@ The isosurface rim IS the light source — everything else is dark.
 
 Pipeline:
   field   = Σ r²/d²  at 1/4 resolution
-  rim     = |∇field| masked near the isosurface  → this is the emission
+  grad    = ∇field  → surface normals + signed distance
+  body    = subsurface depth cue  (thick = warm fill)
+  spec    = directional glint     (fixed screen-space light)
+  rim     = |∇field| band × curvature response  → this is the emission
   interior = field >> threshold → very dim fill
-  bloomed = gaussian_blur(emission) * strength
+  bloomed = gaussian_blur(emission, sim-res) * strength  → upscale
   display = cam * CAM_DIM  +  bloomed   (additive)
 
 Zero new dependencies — numpy + opencv only.
@@ -56,6 +59,18 @@ GRAVITY          = GLOB['gravity']
 GLOB_RIM_COLOR  = np.array(GLOB['rim_color'],   np.float32)
 GLOB_FILL_COLOR = np.array(GLOB['fill_color'],  np.float32)
 GLOB_SIGIL_COL  = np.array(GLOB['sigil_color'], np.float32)
+
+# ── Shader constants (from config) ───────────────────────────────────────────────
+SPEC_SHININESS = GLOB['spec_shininess']
+SPEC_STRENGTH  = GLOB['spec_strength']
+BODY_DEPTH     = GLOB['body_depth']
+BODY_STRENGTH  = GLOB['body_strength']
+CURV_SCALE     = GLOB['curv_scale']
+CURV_MIN       = GLOB['curv_min']
+CURV_MAX       = GLOB['curv_max']
+
+# Fixed screen-space light direction (top-left, y-down)
+_LIGHT = np.array((-0.45, -0.89), np.float32)
 
 # Pre-computed coordinate grids
 _YY, _XX = np.mgrid[0:SIM_H, 0:SIM_W].astype(np.float32)
@@ -147,42 +162,65 @@ def _compute_field(blobs):
 
 def _render_td_glob(field):
     """
-    TouchDesigner-style metaball render.
+    TouchDesigner-style liquid-metal metaball render.
 
-    Emission sources:
-      1. Rim band  — narrow strip where field ≈ META_THRESHOLD
-                     This is the brightest part (where the surface curvature is)
-      2. Interior  — field > threshold, very dim fill (the void absorbs light)
+    Emission sources (all additive, pure emission):
+      1. Body      — subsurface depth cue: thicker regions glow warmer
+      2. Specular  — fixed screen-space glint (metallic reflection)
+      3. Rim       — narrow strip where field ≈ threshold, shaped by curvature
+                        (convex bright, concave dim — liquid tension look)
 
-    Both are drawn onto a float32 emission layer, then bloomed.
+    Bloom is applied at sim resolution (scaled sigma/kernel) then upsampled,
+    giving the same visual result as display-res bloom at ~10× less cost.
     """
-    # ── Rim mask: field within [threshold - band, threshold + band/4] ───────────
+    # ── Surface normals & signed distance ──────────────────────────────────────
+    gy, gx = np.gradient(field)
+    gm = np.hypot(gx, gy).astype(np.float32)
+    gm_s = np.maximum(gm, 1e-4)
+    sd = ((field - META_THRESHOLD) / gm_s).astype(np.float32)   # sim units
+    inside = field > META_THRESHOLD
+
+    # Unit normals in screen space
+    nx = (gx / gm_s).astype(np.float32)
+    ny = (gy / gm_s).astype(np.float32)
+
+    # Curvature = divergence of normal field (convex +, concave −)
+    cnx = np.gradient(nx, axis=1)
+    cny = np.gradient(ny, axis=0)
+    curv = (cnx + cny).astype(np.float32)
+
+    # ── Body glow (subsurface depth cue) ───────────────────────────────────────
+    # sd blows up at blob centers (grad→0), so we use field value directly:
+    # thicker regions (higher field) glow warmer. 0 at surface, ~1 deep inside.
+    body = np.clip((field - META_THRESHOLD) / (META_THRESHOLD * BODY_DEPTH), 0.0, 1.0).astype(np.float32)
+
+    # ── Specular glint (fixed screen-space light) ──────────────────────────────
+    ndotl = (nx * _LIGHT[0] + ny * _LIGHT[1]).astype(np.float32)
+    spec = np.where(inside, np.clip(ndotl, 0.0, 1.0) ** SPEC_SHININESS, 0.0).astype(np.float32)
+
+    # ── Rim band with curvature response ───────────────────────────────────────
     rim_lo = META_THRESHOLD - RIM_BAND
     rim_hi = META_THRESHOLD + RIM_BAND * 0.25
-    rim_t = np.clip((field - rim_lo) / (rim_hi - rim_lo), 0, 1)   # 0→1 ramp in
-    rim_t *= np.clip((rim_hi - field) / (rim_hi - rim_lo), 0, 1)  # 1→0 ramp out
+    rim_t = np.clip((field - rim_lo) / (rim_hi - rim_lo), 0, 1)
+    rim_t *= np.clip((rim_hi - field) / (rim_hi - rim_lo), 0, 1)
+    # Convex (curv>0) → bright, concave (curv<0, e.g. neck between merging blobs) → dim
+    curv_resp = np.clip(1.0 + curv * CURV_SCALE, CURV_MIN, CURV_MAX).astype(np.float32)
 
-    # ── Interior mask ────────────────────────────────────────────────────────────
-    interior = np.clip((field - META_THRESHOLD) / (META_THRESHOLD * 0.8), 0, 1)
+    # ── Composite emission at sim resolution ───────────────────────────────────
+    em = np.zeros((SIM_H, SIM_W, 3), np.float32)
+    em += body[:, :, np.newaxis] * BODY_STRENGTH * GLOB_FILL_COLOR[np.newaxis, np.newaxis, :]
+    em += (rim_t * curv_resp)[:, :, np.newaxis] * GLOB_RIM_COLOR[np.newaxis, np.newaxis, :]
+    em += spec[:, :, np.newaxis] * SPEC_STRENGTH
+    em = np.clip(em, 0, 1.5)
 
-    # ── Build emission at SIM resolution ────────────────────────────────────────
-    em_sim = np.zeros((SIM_H, SIM_W, 3), np.float32)
-
-    # Interior: near-black fill
-    fill = interior[:, :, np.newaxis] * GLOB_FILL_COLOR[np.newaxis, np.newaxis, :]
-    em_sim += fill
-
-    # Rim: bright cyan-white
-    rim_strength = rim_t[:, :, np.newaxis] * GLOB_RIM_COLOR[np.newaxis, np.newaxis, :]
-    em_sim += rim_strength
-
-    em_sim = np.clip(em_sim, 0, 1)
-
-    # ── Upscale to display resolution ───────────────────────────────────────────
-    em_big = cv2.resize(em_sim, (DISPLAY_W, DISPLAY_H), interpolation=cv2.INTER_LINEAR)
-
-    # ── Bloom ────────────────────────────────────────────────────────────────────
-    bloomed = td.bloom(em_big, kernel=35, sigma=14.0, strength=1.3)
+    # ── Bloom at sim resolution (scaled params), then upscale ──────────────────
+    # Kernel/sigma scaled down so the effective bloom at display size matches
+    # the original display-res bloom (kernel=35, sigma=14) visually.
+    _BK = max(3, 35 // SIM_SCALE)
+    _BS = 14.0 / SIM_SCALE
+    bloomed_sim = td.bloom(em, kernel=_BK, sigma=_BS, strength=1.3)
+    bloomed = cv2.resize(bloomed_sim, (DISPLAY_W, DISPLAY_H),
+                         interpolation=cv2.INTER_LANCZOS4)
 
     return bloomed
 
@@ -309,7 +347,7 @@ def run_glob_mode(cam, det):
                if res_frame is not None else frame.copy()
         cam_dim = td.dim_camera(base)   # float32 0-1
 
-        # 2. Metaball bloom layer
+        # 2. Metaball bloom layer (gradient-based liquid metal shader)
         field = _compute_field(blobs)
         bloomed = _render_td_glob(field)   # float32 0-1, display size
 

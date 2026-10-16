@@ -134,4 +134,28 @@ GLOB = {
     'rim_color': (0.85, 0.95, 0.60),
     'fill_color': (0.04, 0.06, 0.02),
     'sigil_color': (0.30, 0.40, 0.15),
+    # ── Liquid-metal shader (gradient-based) ────────────────────────────────────
+    'spec_shininess': 20,   # specular highlight sharpness (pow exponent)
+    'spec_strength':  0.85, # specular intensity
+    'body_depth':     5.0,    # body glow falloff depth (field/ratio → 0..1)
+    'body_strength':  1.20, # body fill brightness
+    'curv_scale':     80.0, # curvature response multiplier
+    'curv_min':       0.20, # min curvature clamp (concave neck darkening)
+    'curv_max':       1.80, # max curvature clamp (convex edge brightening)
 }
+
+# ╔══════════════════════════════════════════════════════════════════════════════╗
+# ║  USER OVERRIDES (settings.py → settings.json)                              ║
+# ║  Applied last: whatever the user saved in the settings GUI wins.           ║
+# ╚══════════════════════════════════════════════════════════════════════════════╝
+def _apply_user_overrides():
+    import settings as _settings
+    user = _settings.load()
+    cam = user.get('cam')
+    if cam:
+        CAM.update(cam)
+    sm = user.get('smoothing')
+    if sm:
+        SMOOTHING.update(sm)
+
+_apply_user_overrides()

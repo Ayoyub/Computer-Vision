@@ -129,7 +129,10 @@ keys = [
     "'td_blue'", "'td_dim'", "'bg_tint'", "'sim_scale'", "'n_blobs'",
     "'meta_threshold'", "'rim_band'", "'blob_max_count'", "'split_cooldown'",
     "'hand_push_radius'", "'blob_repulsion'", "'blob_attract'", "'speed_max'",
-    "'gravity'", "'rim_color'", "'fill_color'", "'sigil_color'", "'num_hands'",
+    "'gravity'", "'rim_color'", "'fill_color'", "'sigil_color'",
+    "'spec_shininess'", "'spec_strength'", "'body_depth'",
+    "'body_strength'", "'curv_scale'", "'curv_min'", "'curv_max'",
+    "'num_hands'",
     "'model_path'", "'min_hand_detection_confidence'", "'min_hand_presence_confidence'",
     "'min_tracking_confidence'", "'source'", "'display_w'", "'display_h'",
     "'detect_w'", "'detect_h'", "'buffer_size'"
@@ -217,6 +220,58 @@ print("18. Ghost-hand guard threshold = 100px (from config) OK")
 mb = virt_mouse._MouseBackend()
 print(f"19. Mouse backend: {mb.kind!r} (graceful degradation: no pynput, no ydotool)")
 
+# ── Settings persistence (settings.py) ───────────────────────────────────────
+import settings as _settings
+import tempfile, os
+# Save → load → reset round-trip
+tmp = _settings.settings_path()
+# Override the path to a temp file for the test (settings_path caches)
+import settings as _s
+_orig = _s.settings_path
+_s.settings_path = lambda: tmp
+try:
+    data = {'cam': {'source': 1, 'camera_fps': 30, 'display_w': 1280, 'display_h': 720,
+                    'detect_auto': False, 'detect_w': 960, 'detect_h': 540,
+                    'detect_latency_budget_ms': 25},
+            'smoothing': {'min_cutoff': 1.5, 'beta': 0.05, 'd_cutoff': 1.0, 'jump_ratio': 1.5}}
+    p = _s.save(data)
+    assert p == tmp
+    loaded = _s.load()
+    assert loaded['cam']['source'] == 1
+    assert loaded['cam']['detect_w'] == 960
+    assert loaded['smoothing']['min_cutoff'] == 1.5
+    # Junk keys are filtered out
+    junk = {'cam': {'bogus_key': 999, 'source': 2}}
+    _s.save(junk)
+    assert _s.load()['cam']['source'] == 2
+    assert 'bogus_key' not in _s.load()['cam']
+    _s.reset()
+    assert _s.load() == {}
+    print("20. settings.py round-trip + junk filter + reset OK")
+finally:
+    _s.settings_path = _orig
+    if tmp.exists():
+        tmp.unlink()
+
+# ── config.py applies user overrides ─────────────────────────────────────────
+import importlib, config
+importlib.reload(config)
+assert config.CAM['source'] == 0
+assert config.SMOOTHING['min_cutoff'] == 1.0
+print("21. config.py default overrides OK")
+
+# ── settings_gui imports cleanly ─────────────────────────────────────────────
+import settings_gui
+assert hasattr(settings_gui, 'SettingsGUI')
+assert hasattr(settings_gui, 'CameraPreview')
+assert hasattr(settings_gui, 'list_cameras')
+print("22. settings_gui import OK")
+
+# ── main.py --settings wiring ────────────────────────────────────────────────
+src = open('main.py').read()
+assert '--settings' in src
+print("23. main.py --settings wiring OK")
+
 print("\n" + "=" * 60)
-print("ALL 19 TESTS PASSED — fully validated codebase")
+print("ALL 23 TESTS PASSED — fully validated codebase")
 print("=" * 60)

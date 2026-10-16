@@ -529,6 +529,15 @@ def main():
     global _menu_sphere_ay, _menu_sphere_ax, _menu_pyramid_ay, _menu_pyramid_ax
     global DETECT_W, DETECT_H
 
+    # ── Settings GUI (--settings) ─────────────────────────────────────────────
+    # Standalone configurator: pick camera, frame rate, display + detection
+    # resolution, smoothing. Saves to the settings file that config.py reads
+    # on every launch, then exits — run main.py normally to use the settings.
+    if "--settings" in sys.argv:
+        import settings_gui
+        settings_gui.open_settings()
+        sys.exit(0)
+
     # ── Auto detection resolution ─────────────────────────────────────────────
     # Pick the finest detection resolution the machine can sustain.
     # Runs BEFORE the camera stream so it can use the camera without a second
