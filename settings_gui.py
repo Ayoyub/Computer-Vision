@@ -105,15 +105,37 @@ class CameraPreview:
                 self._cap.release()
                 self._cap = None
 
+    @staticmethod
+    def _open_camera(idx, fps):
+        """Open the camera with retries.
+
+        On Linux/V4L2 the device may not be fully released right after the
+        probe loop (or a previous capture), so the first open/read often
+        fails. Retry a few times with a settle delay in between.
+        Returns a working VideoCapture or None.
+        """
+        for _attempt in range(4):
+            cap = cv2.VideoCapture(idx)
+            if cap.isOpened():
+                cap.set(cv2.CAP_PROP_FRAME_WIDTH, CameraPreview.PREVIEW_W * 2)
+                cap.set(cv2.CAP_PROP_FRAME_HEIGHT, CameraPreview.PREVIEW_H * 2)
+                cap.set(cv2.CAP_PROP_FPS, fps)
+                cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+                # Prime the pipeline — the first frames after open are often
+                # undeliverable on V4L2 devices.
+                ok, _ = cap.read()
+                if ok:
+                    return cap
+            cap.release()
+            if _attempt < 3:
+                time.sleep(0.25)
+        return None
+
     def _run(self, idx, fps):
-        cap = cv2.VideoCapture(idx)
-        if not cap.isOpened():
+        cap = self._open_camera(idx, fps)
+        if cap is None:
             self._running = False
             return
-        cap.set(cv2.CAP_PROP_FRAME_WIDTH, self.PREVIEW_W * 2)
-        cap.set(cv2.CAP_PROP_FRAME_HEIGHT, self.PREVIEW_H * 2)
-        cap.set(cv2.CAP_PROP_FPS, fps)
-        cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
         with self._cap_lock:
             self._cap = cap
 
@@ -126,7 +148,12 @@ class CameraPreview:
             small = cv2.resize(frame, (self.PREVIEW_W, self.PREVIEW_H),
                                interpolation=cv2.INTER_AREA)
             small = cv2.flip(small, 1)  # mirror, same as the app
-            row = cv2.cvtColor(small, cv2.COLOR_BGR2RGB).tobytes()
+            # Encode as PNG — PhotoImage(data=...) needs an image-file
+            # format; raw RGB bytes are not a valid input.
+            ok_enc, png = cv2.imencode(".png", small)
+            if not ok_enc:
+                continue
+            row = png.tobytes()
             # Tk must be touched from the main thread only
             self._root.after(0, self._push, row)
 
@@ -135,11 +162,8 @@ class CameraPreview:
             if self._cap is cap:
                 self._cap = None
 
-    def _push(self, row_bytes):
-        # Tk's PhotoImage default format is "gif"; raw RGB needs format="raw"
-        # or Tk tries to parse the bytes as GIF and fails silently → black canvas.
-        img = tk.PhotoImage(width=self.PREVIEW_W, height=self.PREVIEW_H,
-                            data=row_bytes, format="raw")
+    def _push(self, png_bytes):
+        img = tk.PhotoImage(data=png_bytes)
         self._canvas.itemconfig(self._photo_item, image=img)
         self._photo_ref = img  # prevent GC
 

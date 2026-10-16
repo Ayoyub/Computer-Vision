@@ -145,10 +145,6 @@ dependencies = [
     { name = "numpy", version = "2.4.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version == '3.11.*'" },
     { name = "numpy", version = "2.5.4", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.12'" },
     { name = "opencv-contrib-python" },
-]
-
-[package.optional-dependencies]
-mouse = [
     { name = "pynput" },
 ]
 
@@ -157,9 +153,8 @@ requires-dist = [
     { name = "mediapipe", specifier = "==1.1.0" },
     { name = "numpy", specifier = ">=1.26" },
     { name = "opencv-contrib-python", specifier = ">=4.10" },
-    { name = "pynput", marker = "extra == 'mouse'", specifier = ">=1.7" },
+    { name = "pynput", specifier = ">=1.7" },
 ]
-provides-extras = ["mouse"]
 
 [package.metadata.requires-dev]
 dev = []

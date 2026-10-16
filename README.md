@@ -39,12 +39,12 @@ uv run python main.py
 
 The MediaPipe model (`hand_landmarker.task`, ~7.5 MB) is downloaded automatically on first launch.
 
-### Optional: mouse mode extras
-Mouse mode needs an input backend. On Linux it tries ydotool first (Wayland + X11), then pynput (X11 only). If you want pynput as a fallback:
+On Linux, `pynput`'s `evdev` backend must compile against Python's headers. If you get a build error about `Python.h`, install the development package and retry:
 ```bash
-uv sync --extra mouse
+# Fedora / Nobara
+sudo dnf install python3-devel
+uv sync
 ```
-On macOS and Windows pynput works out of the box.
 
 ### Mouse mode on Wayland
 For native Wayland input, use ydotool instead of pynput:
