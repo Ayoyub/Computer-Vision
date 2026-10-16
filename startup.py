@@ -291,18 +291,22 @@ def _probe_cameras(max_idx: int = 8) -> list:
 def _open_camera(idx, width, height, fps):
     """Open camera with retry (same pattern as settings_gui)."""
     for _attempt in range(4):
-        cap = cv2.VideoCapture(idx)
+        # Use CAP_ANY — forcing CAP_V4L2 explicitly causes V4L2 buffer
+        # initialization issues where isOpened() returns True but the
+        # first read() fails, leaving the device in a bad state.
+        cap = cv2.VideoCapture(idx, cv2.CAP_ANY)
         if cap.isOpened():
             cap.set(cv2.CAP_PROP_FRAME_WIDTH,  width)
             cap.set(cv2.CAP_PROP_FRAME_HEIGHT, height)
             cap.set(cv2.CAP_PROP_FPS, fps)
-            # Prime the pipeline — first frames are often undeliverable on V4L2
+            # Give the device a moment to initialize the buffer
+            time.sleep(0.15)
             ok, _ = cap.read()
             if ok:
                 return cap
         cap.release()
         if _attempt < 3:
-            time.sleep(0.25)
+            time.sleep(0.4)
     return None
 
 
