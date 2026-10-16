@@ -197,138 +197,88 @@ _menu_pyramid_ay = 0.0
 _menu_pyramid_ax = 0.0
 
 
-def _draw_dynamic_menu(img, cx, cy, hovered, cursor_x, cursor_y,
-                       rotation_offset, options_list, icon_drawers=None):
+def _draw_dynamic_menu(img, cx, cy, hovered_idx, carousel_theta,
+                       options_list, icon_drawers=None):
     """
-    Dessine le menu rotatif en style carrousel 3D (DS-style invisible carousel).
-    Les items sont projetés avec une profondeur simulée :
-      - L'item le plus proche du curseur est plus grand et plus lumineux
-      - Les items loin du curseur sont plus petits et plus foncés
-      - Ordre de rendu back-to-front pour l'effet de profondeur
+    Infinite 3D Wheel Carousel.
+    The carousel rotates based on carousel_theta.
+    Items closest to the 'front' (theta ≈ 270) are largest.
     """
     global _menu_sphere_ay, _menu_sphere_ax, _menu_pyramid_ay, _menu_pyramid_ax
 
-    # Centre du menu
-    cv2.circle(img, (cx, cy), 15, (20, 20, 20), -1)
-    cv2.circle(img, (cx, cy), 15, (100, 100, 100), 2, cv2.LINE_AA)
-    cv2.circle(img, (cx, cy), 4, (255, 255, 255), -1, cv2.LINE_AA)
-
-    # ── Déterminer l'angle du curseur ───────────────────────────────────────────
-    if cursor_x is not None and cursor_y is not None:
-        cursor_angle = (math.degrees(math.atan2(-(cursor_y - cy), cursor_x - cx)) + 360) % 360
-    else:
-        cursor_angle = None
-
-    # ── Calculer la position 3D de chaque option ───────────────────────────────
     n_opts = len(options_list)
-    if n_opts == 0:
-        return
+    if n_opts == 0: return
 
-    ITEM_MIN_SCALE = 0.55   # échelle minimale pour les items en arrière-plan
-    ITEM_Y_SHIFT   = 18.0   # décalage vertical pour l'effet de profondeur
-    ITEM_GAP       = 360.0 / n_opts  # espacement angulaire entre items
+    # Rendu 3D settings
+    RADIUS_X = MENU_RADIUS * 1.2
+    RADIUS_Z = MENU_RADIUS * 0.8  # profondeur
+    ITEM_MIN_SCALE = 0.5
+    FRONT_ANGLE = 270 # Position sélectionnée (bas centre)
 
-    # Build rendered items sorted back-to-front
     rendered = []
     for i, opt in enumerate(options_list):
         label, base_angle, color = opt[0], opt[1], opt[2]
-
-        # Angle absolu de l'option sur le carrousel
-        angle_deg = (base_angle + rotation_offset) % 360
+        
+        # Current angle on the wheel
+        angle_deg = (base_angle + carousel_theta) % 360
         rad = math.radians(angle_deg)
-
-        # Position de base sur le cercle
-        bx = cx + MENU_RADIUS * math.cos(rad)
-        by = cy - MENU_RADIUS * math.sin(rad)
-
-        # Profondeur relative au curseur (0 = devant, 180 = derrière)
-        if cursor_angle is not None:
-            diff = min(abs(angle_deg - cursor_angle), 360 - abs(angle_deg - cursor_angle))
-        else:
-            diff = 180.0  # pas de curseur → milieu
-
-        # Normalisé : 0.0 (devant) → 1.0 (derrière)
-        depth_t = diff / 180.0
-        depth_t = max(0.0, min(1.0, depth_t))
-
-        # Facteur d'échelle et décalage Y (profondeur)
-        scale = 1.0 - depth_t * (1.0 - ITEM_MIN_SCALE)
-        y_shift = depth_t * ITEM_Y_SHIFT  # les items derrière remontent légèrement
-
+        
+        # 3D projection: items follow an ellipse in X-Z, projected to X-Y
+        # Z goes from -1 (back) to 1 (front)
+        z = -math.sin(rad) 
+        x = math.cos(rad)
+        
+        # screen pos
+        ox = int(cx + x * RADIUS_X)
+        oy = int(cy + z * (RADIUS_Z * 0.4)) # slight tilt
+        
+        # depth-based scale and brightness
+        # depth_t: 0 (back) to 1 (front)
+        depth_t = (z + 1) / 2.0
+        scale = ITEM_MIN_SCALE + depth_t * (1.0 - ITEM_MIN_SCALE)
+        
         r = int(MENU_ICON_RADIUS * scale)
-        ox = int(bx)
-        oy = int(by - y_shift)
-
-        is_hovered = (hovered == i)
-        # L'item sélectionné est toujours devant, même si le curseur est loin
-        if is_hovered and depth_t > 0.5:
-            depth_t = max(0.0, depth_t - 0.3)
-            scale = 1.0 - depth_t * (1.0 - ITEM_MIN_SCALE)
-            r = int(MENU_ICON_RADIUS * scale)
-            oy = int(by - (depth_t * ITEM_Y_SHIFT))
+        hot = (i == hovered_idx)
 
         rendered.append({
             'i': i, 'label': label, 'color': color,
             'ox': ox, 'oy': oy, 'r': r,
-            'scale': scale, 'depth_t': depth_t,
-            'is_hovered': is_hovered,
+            'scale': scale, 'z': z, 'hot': hot,
+            'depth_t': depth_t
         })
 
-    # Tri back-to-front : les items les plus profonds (depth_t max) en premier
-    rendered.sort(key=lambda item: item['depth_t'], reverse=True)
+    # Sort back-to-front
+    rendered.sort(key=lambda item: item['z'])
 
     ov = img.copy()
-    if cursor_x is not None and cursor_y is not None:
-        cv2.line(ov, (cx, cy), (cursor_x, cursor_y), (255, 255, 255), 3, cv2.LINE_AA)
-
     for item in rendered:
-        i = item['i']
-        label = item['label']
-        color = item['color']
-        ox, oy, r = item['ox'], item['oy'], item['r']
-        scale = item['scale']
-        depth_t = item['depth_t']
-        hot = item['is_hovered']
+        label, color, ox, oy, r, scale, z, hot, depth_t = \
+            item['label'], item['color'], item['ox'], item['oy'], item['r'], \
+            item['scale'], item['z'], item['hot'], item['depth_t']
+            
+        brightness = 0.3 + 0.7 * depth_t
+        c_dim = (int(color[0]*brightness), int(color[1]*brightness), int(color[2]*brightness))
+        
+        # Glow for the front-most item
+        if hot:
+            for glow_r in (r + 15, r + 8, r + 4):
+                cv2.circle(ov, (ox, oy), int(glow_r), color, -1)
 
-        # Couleur et opacité en fonction de la profondeur
-        depth_brightness = 0.4 + 0.6 * scale  # 0.4 (derrière) → 1.0 (devant)
-        fb_r = int(color[0] * depth_brightness)
-        fb_g = int(color[1] * depth_brightness)
-        fb_b = int(color[2] * depth_brightness)
+        # Bubble
+        cv2.circle(ov, (ox, oy), r, color if hot else c_dim, -1)
+        
+        # Outline
+        border_val = int(200 * brightness)
+        cv2.circle(img, (ox, oy), r, (border_val, border_val, border_val), 1, cv2.LINE_AA)
 
-        # Ligne centre → bulle (dans le overlay, translucide, diminue avec la profondeur)
-        line_alpha = 0.3 + 0.5 * scale
-        lc = (int(80 * scale), int(80 * scale), int(80 * scale))
-        cv2.line(ov, (cx, cy), (ox, oy), lc, 1, cv2.LINE_AA)
-
-        # Glow (seulement si hover et devant)
-        if hot and depth_t < 0.6:
-            glow_intensity = 1.0 - depth_t
-            for glow_r in (r + 12, r + 6, r + 3):
-                gc = (int(color[0] * glow_intensity), int(color[1] * glow_intensity),
-                      int(color[2] * glow_intensity))
-                cv2.circle(ov, (ox, oy), glow_r, gc, -1)
-
-        # Fond de bulle (semi-transparent, accumulé dans l'overlay)
-        bg_color = (fb_r, fb_g, fb_b) if not hot else color
-        cv2.circle(ov, (ox, oy), r, bg_color, -1)
-
-        # Contour (opaque, direct sur img)
-        border_r = int(120 * depth_brightness)
-        cv2.circle(img, (ox, oy), r,
-                   color if hot else (border_r, border_r, border_r),
-                   2 if hot else int(1 * scale + 0.5), cv2.LINE_AA)
-
-        # ── Icône dans la bulle (opaque, direct sur img) ────────────────────────
+        # Icon
         if icon_drawers and label in icon_drawers:
             drawer = icon_drawers[label]
             if drawer is None:
                 if label == "Sphere":
-                    _draw_sphere_icon(img, ox, oy, r, color,
-                                      _menu_sphere_ay, _menu_sphere_ax, hot)
+                    _draw_sphere_icon(img, ox, oy, r, color, _menu_sphere_ay, _menu_sphere_ax, hot)
                 elif label == "Pyramid":
-                    _draw_pyramid_icon(img, ox, oy, r, color,
-                                       _menu_pyramid_ay, _menu_pyramid_ax, hot)
+                    _draw_pyramid_icon(img, ox, oy, r, color, _menu_pyramid_ay, _menu_pyramid_ax, hot)
             else:
                 drawer(img, ox, oy, r, color, hot)
         else:
@@ -336,23 +286,14 @@ def _draw_dynamic_menu(img, cx, cy, hovered, cursor_x, cursor_y,
             if main_drawer:
                 main_drawer(img, ox, oy, r, color, hot)
 
-        # Label texte sous la bulle (fond opaque sombre sur img, texte direct)
-        font, scale_f = cv2.FONT_HERSHEY_SIMPLEX, (0.45 if hot else 0.40) * scale + 0.1
-        scale_f = max(0.25, min(0.55, scale_f))
-        (tw, th), _ = cv2.getTextSize(label, font, scale_f, 1)
-        lx, ly = ox - tw // 2, oy + th // 2 + r + int(15 * scale)
-        cv2.rectangle(img, (lx - 6, ly - th - 6), (lx + tw + 6, ly + 6),
-                      (10, 10, 10), -1)
-        txt_color = (255, 255, 255) if hot else (int(170 * depth_brightness),
-                                                   int(170 * depth_brightness),
-                                                   int(170 * depth_brightness))
-        cv2.putText(img, label, (lx, ly), font, scale_f,
-                    txt_color, 1, cv2.LINE_AA)
+        # Text label
+        if depth_t > 0.4:
+            font, sc = cv2.FONT_HERSHEY_SIMPLEX, 0.4 * scale
+            (tw, th), _ = cv2.getTextSize(label, font, sc, 1)
+            lx, ly = ox - tw // 2, oy + r + 20
+            cv2.putText(img, label, (lx, ly), font, sc, (255, 255, 255) if hot else (150, 150, 150), 1, cv2.LINE_AA)
 
-    # Un seul addWeighted pour tout l'overlay du menu
-    cv2.addWeighted(ov, 0.45, img, 0.55, 0, img)
-    if cursor_x is not None and cursor_y is not None:
-        cv2.circle(img, (cursor_x, cursor_y), 8, (255, 255, 255), -1, cv2.LINE_AA)
+    cv2.addWeighted(ov, 0.5, img, 0.5, 0, img)
 
 
 def _draw_fps(img, fps, mode, hand_count, shapes_count=0):
@@ -583,18 +524,19 @@ def _update_shape_physics(shape):
             shape.vy = 0
 
 
-def _hovered_option_dynamic(x, y, cx, cy, rotation_offset, options_list):
-    """Index of the menu option within ±MENU['hover_angle'] of the cursor, else -1."""
-    angle_rad = math.atan2(-(y - cy), x - cx)
-    angle_deg = (math.degrees(angle_rad) + 360) % 360
+def _get_front_option_idx(carousel_theta, options_list):
+    """
+    Returns the index of the option currently closest to the front (270 degrees).
+    """
+    FRONT_ANGLE = 270
     best_i, min_diff = -1, float('inf')
     for i, opt in enumerate(options_list):
-        opt_angle = (opt[1] + rotation_offset) % 360
-        diff = min(abs(angle_deg - opt_angle), 360 - abs(angle_deg - opt_angle))
+        angle_deg = (opt[1] + carousel_theta) % 360
+        diff = min(abs(angle_deg - FRONT_ANGLE), 360 - abs(angle_deg - FRONT_ANGLE))
         if diff < min_diff:
             min_diff = diff
             best_i = i
-    return best_i if min_diff <= MENU['hover_angle'] else -1
+    return best_i
 
 # ╔══════════════════════════════════════════════════════════════════════════════╗
 # ║  MAIN LOOP                                                                 ║
@@ -760,24 +702,20 @@ def main():
                         menu_double_fist_ctr[0] = 0
 
             elif menu_phase == 1:
-                # ── Menu open: wrist = cursor, pinch = confirm ────────────────────
+                # ── Menu open: wrist = carousel rotator, pinch = confirm ───────────────
                 if hand_data:
                     pincement = hand_data[0]['gestes']['pincement']
                     pts = [(int(x * SX), int(y * SY)) for x, y in hand_data[0]['points']]
-                    wx, wy = pts[0]
-                    menu_cursor_x, menu_cursor_y = wx, wy
-                    dist = _dist((wx, wy), (menu_cx, menu_cy))
-
-                    if dist > MENU['open_deadzone']:
-                        hovered_idx = _hovered_option_dynamic(
-                            wx, wy, menu_cx, menu_cy,
-                            menu_rotation_frozen, MENU_OPTIONS)
-                    else:
-                        hovered_idx = -1
+                    
+                    # Carousel rotation controlled by wrist X position
+                    wrist_x = pts[0][0]
+                    rot_delta = (wrist_x - DISPLAY_W/2) / (DISPLAY_W/2) * MENU['carousel_sensitivity']
+                    menu_rotation = (menu_rotation + rot_delta) % 360
+                    
+                    hovered_idx = _get_front_option_idx(menu_rotation, MENU_OPTIONS)
 
                     _draw_dynamic_menu(display, menu_cx, menu_cy,
-                                       hovered_idx, menu_cursor_x, menu_cursor_y,
-                                       menu_rotation_frozen,
+                                       hovered_idx, menu_rotation,
                                        MENU_OPTIONS)
 
                     if pincement:
@@ -791,7 +729,6 @@ def main():
                         # Released fists → enter close_requested (ignore held fists)
                         menu_menu_state = 'close_requested'
                         menu_double_fist_ctr[0] = 0
-                    # else: both_fists_now → ignore, user is just holding the menu open
                 else:
                     # No hand → assume fists released
                     if menu_menu_state == 'open':
@@ -923,23 +860,18 @@ def main():
                     if hand_data:
                         pincement = hand_data[0]['gestes']['pincement']
                         pts = [(int(x * SX), int(y * SY)) for x, y in hand_data[0]['points']]
-                        wx, wy = pts[0]
-                        shape_menu_cursor_x, shape_menu_cursor_y = wx, wy
-                        dist = _dist((wx, wy), (shape_menu_cx, shape_menu_cy))
-                        if dist > MENU['open_deadzone']:
-                            shape_hovered_idx = _hovered_option_dynamic(
-                                wx, wy,
-                                shape_menu_cx, shape_menu_cy,
-                                shape_menu_rotation_frozen,
-                                SHAPE_OPTIONS)
-                        else:
-                            shape_hovered_idx = -1
+                        
+                        # Carousel rotation
+                        wrist_x = pts[0][0]
+                        rot_delta = (wrist_x - DISPLAY_W/2) / (DISPLAY_W/2) * MENU['carousel_sensitivity']
+                        shape_menu_rotation = (shape_menu_rotation + rot_delta) % 360
+                        
+                        shape_hovered_idx = _get_front_option_idx(shape_menu_rotation, SHAPE_OPTIONS)
 
                         _draw_dynamic_menu(
                             display,
                             shape_menu_cx, shape_menu_cy,
-                            shape_hovered_idx, shape_menu_cursor_x, shape_menu_cursor_y,
-                            shape_menu_rotation_frozen,
+                            shape_hovered_idx, shape_menu_rotation,
                             SHAPE_OPTIONS,
                             icon_drawers=_SHAPE_ICON_DRAWERS)
 
@@ -955,12 +887,10 @@ def main():
                             shape_menu_phase = 0
                             shape_menu_state = 'idle'
                             shape_hovered_idx = -1
-                            shape_menu_cursor_x = shape_menu_cursor_y = None
                         elif not both_fists_now:
                             # Released fists → enter close_requested (ignore held fists)
                             shape_menu_state = 'close_requested'
                             double_fist_counter[0] = 0
-                        # else: both_fists_now → ignore, user is just holding the menu open
                     else:
                         if shape_menu_state == 'open':
                             shape_menu_state = 'close_requested'

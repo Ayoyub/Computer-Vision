@@ -81,8 +81,7 @@ MOUSE = {
 MENU = {
     'radius': 130,
     'icon_radius': 38,
-    'hover_angle': 45,
-    'open_deadzone': 40,
+    'carousel_sensitivity': 1.2,
 }
 
 SHAPES = {

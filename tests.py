@@ -120,7 +120,7 @@ keys = [
     "'hand_proximity_px'", "'spread_px_min'", "'spread_px_max'", "'speed_mult_min'",
     "'speed_mult_max'", "'cursor_min_cutoff'", "'cursor_beta'", "'zone_x_min'",
     "'zone_x_max'", "'zone_y_min'", "'zone_y_max'", "'radius'", "'icon_radius'",
-    "'hover_angle'", "'open_deadzone'", "'sphere_rings'", "'sphere_segments'",
+    "'carousel_sensitivity'", "'sphere_rings'", "'sphere_segments'",
     "'sphere_color'", "'pyramid_color'", "'pyramid_radius_initial'", "'max_shapes'",
     "'triple_clic_fenetre'", "'grab_range_mult'", "'spawn_min_dist_mult'", "'lissage'",
     "'friction'", "'vitesse_min'", "'rotation_sensibilite'", "'rotation_auto_sphere'",

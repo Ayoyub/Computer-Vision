@@ -55,6 +55,45 @@ class _StartupState:
         self.prev_key: int | None = None
 
 
+import threading
+
+class _StartupDetectionThread:
+    def __init__(self, landmarker):
+        self.landmarker = landmarker
+        self.frame = None
+        self.result = None
+        self.lock = threading.Lock()
+        self.running = True
+        self.thread = threading.Thread(target=self._run, daemon=True)
+        self.thread.start()
+
+    def _run(self):
+        while self.running:
+            with self.lock:
+                f = self.frame
+            if f is None:
+                time.sleep(0.005)
+                continue
+            
+            mp_img = mp.Image(image_format=mp.ImageFormat.SRGB, data=cv2.cvtColor(f, cv2.COLOR_BGR2RGB))
+            res = self.landmarker.detect_for_video(mp_img, int(time.time() * 1000))
+            with self.lock:
+                self.result = res
+                self.frame = None
+
+    def submit(self, frame):
+        with self.lock:
+            self.frame = frame.copy()
+
+    def get(self):
+        with self.lock:
+            return self.result
+
+    def stop(self):
+        self.running = False
+        self.thread.join(timeout=1.0)
+
+
 # ── Gesture estimation (same logic as hand_detect) ─────────────────────────────
 
 def _est_poing(pts, fold_scale, tip_mid_ratio, min_folded) -> bool:
@@ -405,6 +444,9 @@ def run_startup() -> bool:
         print(f"ERROR: could not open camera {CAM['source']}. "
               "Use --settings to pick a different source.")
         return False
+    
+    det_thread = _StartupDetectionThread(_landmarker)
+    last_res = None
 
     print("Startup: hold your hand in front of the camera. Press SPACE to calibrate.")
 
@@ -413,17 +455,16 @@ def run_startup() -> bool:
         if not ok:
             break
         frame = cv2.flip(frame, 1)
-
-        # Detect hands (same as main: detect on full frame)
-        mp_img = mp.Image(
-            image_format=mp.ImageFormat.SRGB,
-            data=cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
-        result = _landmarker.detect_for_video(mp_img, int(time.time() * 1000))
+        
+        det_thread.submit(frame)
+        result = det_thread.get()
+        if result:
+            last_res = result
 
         pts = None
-        if result.hand_landmarks:
+        if last_res and last_res.hand_landmarks:
             h, w = frame.shape[:2]
-            raw = [(lm.x * w, lm.y * h) for lm in result.hand_landmarks[0]]
+            raw = [(lm.x * w, lm.y * h) for lm in last_res.hand_landmarks[0]]
             pts = smoother.smooth(raw, time.monotonic())
 
         # Estimate gestures
@@ -478,6 +519,7 @@ def run_startup() -> bool:
                 HAND['pinch_ratio_off'] = state.pinch_ratio_off
                 if cap:
                     cap.release()
+                det_thread.stop()
                 cv2.destroyAllWindows()
                 print("Launching main app …")
                 return True
