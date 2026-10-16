@@ -259,6 +259,46 @@ def _draw_feedback(img, state, pts, poing, pinch, hand_count, fps):
 
 # ── Calibration ─────────────────────────────────────────────────────────────────
 
+# Qt key codes as returned by cv2.waitKey on Linux (Qt/Wayland backend)
+_K_UP    = 0x010000EA   # 16777258
+_K_DOWN  = 0x010000EC   # 16777260
+_K_LEFT  = 0x010000E9   # 16777257
+_K_RIGHT = 0x010000EB   # 16777259
+
+
+def _probe_cameras(max_idx: int = 8) -> list:
+    """Return list of camera indices that deliver frames."""
+    found = []
+    for i in range(max_idx):
+        cap = cv2.VideoCapture(i)
+        ok = cap.isOpened()
+        if ok:
+            ok, _ = cap.read()
+        cap.release()
+        time.sleep(0.05)
+        if ok:
+            found.append(i)
+    return found
+
+
+def _open_camera(idx, width, height, fps):
+    """Open camera with retry (same pattern as settings_gui)."""
+    for _attempt in range(4):
+        cap = cv2.VideoCapture(idx)
+        if cap.isOpened():
+            cap.set(cv2.CAP_PROP_FRAME_WIDTH,  width)
+            cap.set(cv2.CAP_PROP_FRAME_HEIGHT, height)
+            cap.set(cv2.CAP_PROP_FPS, fps)
+            # Prime the pipeline — first frames are often undeliverable on V4L2
+            ok, _ = cap.read()
+            if ok:
+                return cap
+        cap.release()
+        if _attempt < 3:
+            time.sleep(0.25)
+    return None
+
+
 def _run_calibration(state, cap):
     """Measure hand scale + benchmark detection."""
     print("Calibrating — hold still …")
@@ -289,7 +329,7 @@ def _run_calibration(state, cap):
     else:
         print("  No hand detected during calibration")
 
-    # Benchmark
+    # Benchmark (opens separate handles, releases them)
     try:
         hi_ms   = _benchmark_latency(_landmarker, 1280, 720, CAM['source'], samples=4)
         base_ms = _benchmark_latency(_landmarker, 640, 360, CAM['source'], samples=4)
@@ -325,6 +365,24 @@ def run_startup() -> bool:
     state    = _StartupState()
     smoother = LandmarkSmoother()
     fps_frames, fps_time, current_fps = 0, time.monotonic(), 0.0
+
+    # Probe for available cameras
+    available = _probe_cameras()
+    if not available:
+        print("ERROR: no camera detected. Use --settings to pick a source.")
+        return False
+    print(f"Detected cameras: {available}")
+
+    # Open camera with retry
+    cap = _open_camera(CAM['source'], CAM['display_w'], CAM['display_h'],
+                       CAM.get('camera_fps', 60))
+    if cap is None:
+        # Fall back to first available
+        cap = _open_camera(available[0], CAM['display_w'], CAM['display_h'],
+                           CAM.get('camera_fps', 60))
+    if cap is None:
+        print("ERROR: could not open camera.")
+        return False
 
     print("Startup: hold your hand in front of the camera. Press SPACE to calibrate.")
 
@@ -370,7 +428,8 @@ def run_startup() -> bool:
 
         # ── ESC → quit ───────────────────────────────────────────────────────
         if key == 27:
-            cap.release()
+            if cap:
+                cap.release()
             cv2.destroyAllWindows()
             return False
 
@@ -381,47 +440,49 @@ def run_startup() -> bool:
                 _run_calibration(state, cap)
                 # The benchmark opens a second V4L2 handle on the same camera,
                 # which can seize the device on Linux — re-acquire the capture.
-                cap.release()
-                cap = cv2.VideoCapture(CAM['source'])
-                cap.set(cv2.CAP_PROP_FRAME_WIDTH,  CAM['display_w'])
-                cap.set(cv2.CAP_PROP_FRAME_HEIGHT, CAM['display_h'])
-                cap.set(cv2.CAP_PROP_FPS, CAM.get('camera_fps', 60))
-                # Flush stale key events queued during calibration, otherwise a
-                # SPACE pressed mid-calibration swallows the launch press.
+                if cap:
+                    cap.release()
+                    cap = None
+                cap = _open_camera(CAM['source'], CAM['display_w'], CAM['display_h'],
+                                   CAM.get('camera_fps', 60))
+                # Flush any stale key events queued during calibration
                 state.prev_key = None
-                while cv2.waitKey(1) & 0xFF:
-                    pass
+                while True:
+                    k = cv2.pollKey()
+                    if k == -1:
+                        break
             else:
                 # Apply tuned params
                 HAND['fist_min_folded'] = state.fist_min_folded
                 HAND['pinch_ratio_on']  = state.pinch_ratio_on
                 HAND['pinch_ratio_off'] = state.pinch_ratio_off
-                cap.release()
+                if cap:
+                    cap.release()
                 cv2.destroyAllWindows()
                 print("Launching main app …")
                 return True
 
         # ── Arrow keys → adjust params ───────────────────────────────────────
-        elif key == 265 and state.prev_key != 265:   # UP
-            state.prev_key = 265
+        elif key == _K_UP and state.prev_key != _K_UP:   # UP
+            state.prev_key = _K_UP
             if state.fist_min_folded < _ADJUSTABLE['fist_min_folded']['hi']:
                 state.fist_min_folded += 1
                 print(f"fist_min_folded → {state.fist_min_folded}")
-        elif key == 266 and state.prev_key != 266:   # DOWN
-            state.prev_key = 266
+        elif key == _K_DOWN and state.prev_key != _K_DOWN:   # DOWN
+            state.prev_key = _K_DOWN
             if state.fist_min_folded > _ADJUSTABLE['fist_min_folded']['lo']:
                 state.fist_min_folded -= 1
                 print(f"fist_min_folded → {state.fist_min_folded}")
-        elif key == 263 and state.prev_key != 263:   # LEFT
-            state.prev_key = 263
+        elif key == _K_LEFT and state.prev_key != _K_LEFT:   # LEFT
+            state.prev_key = _K_LEFT
             step = _ADJUSTABLE['pinch_ratio_on']['step']
             if state.pinch_ratio_on > _ADJUSTABLE['pinch_ratio_on']['lo']:
                 state.pinch_ratio_on = round(state.pinch_ratio_on - step, 2)
             if state.pinch_ratio_off > _ADJUSTABLE['pinch_ratio_off']['lo']:
                 state.pinch_ratio_off = round(state.pinch_ratio_off - step, 2)
             print(f"pinch on={state.pinch_ratio_on}, off={state.pinch_ratio_off}")
-        elif key == 262 and state.prev_key != 262:   # RIGHT
-            state.prev_key = 262
+        elif key == _K_RIGHT and state.prev_key != _K_RIGHT:   # RIGHT
+            state.prev_key = _K_RIGHT
             step = _ADJUSTABLE['pinch_ratio_on']['step']
             if state.pinch_ratio_on < _ADJUSTABLE['pinch_ratio_on']['hi']:
                 state.pinch_ratio_on = round(state.pinch_ratio_on + step, 2)
@@ -429,6 +490,7 @@ def run_startup() -> bool:
                 state.pinch_ratio_off = round(state.pinch_ratio_off + step, 2)
             print(f"pinch on={state.pinch_ratio_on}, off={state.pinch_ratio_off}")
 
-    cap.release()
+    if cap:
+        cap.release()
     cv2.destroyAllWindows()
     return False
