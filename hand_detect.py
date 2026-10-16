@@ -66,7 +66,7 @@ def _benchmark_latency(landmarker, w: int, h: int, src, samples: int = 6) -> flo
     cap.set(cv2.CAP_PROP_FRAME_HEIGHT, h)
 
     times = []
-    ts = 0
+    ts = int(time.time() * 1000)  # start from a real timestamp, not 0
     for _ in range(samples):
         ok, frame = cap.read()
         if not ok:

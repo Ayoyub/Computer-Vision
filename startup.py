@@ -69,6 +69,32 @@ def _est_poing(pts, fold_scale, tip_mid_ratio, min_folded) -> bool:
     return folded >= min_folded
 
 
+def _est_poing_adaptive(pts, state) -> bool:
+    """
+    Adaptive fist detection for the calibration screen.
+    Uses the calibrated hand scale when available, and applies a
+    more lenient threshold when the user has a large hand.
+    """
+    scale = max(math.hypot(pts[9][0] - pts[0][0], pts[9][1] - pts[0][1]), 1.0)
+    # Use calibrated scale if available, otherwise fall back to instantaneous
+    ref = hand_detect_mod.HAND_CALIB.get('reference_scale_px', 0.0)
+    if ref > 0:
+        scale = ref
+
+    # For big hands, the model sometimes needs a more lenient threshold
+    # because the relative finger-to-palm ratio is naturally larger.
+    fold_scale = HAND['fist_fold_scale']
+    tip_mid_ratio = HAND['fist_tip_mid_ratio']
+    min_folded = state.fist_min_folded
+
+    # If hand scale is > 120px, use a slightly more lenient fold scale
+    if scale > 120:
+        fold_scale = min(fold_scale + 0.15, 0.70)
+        tip_mid_ratio = min(tip_mid_ratio + 0.05, 0.95)
+
+    return _est_poing(pts, fold_scale, tip_mid_ratio, min_folded)
+
+
 def _est_pinch(pts, pinch_on, pinch_off) -> bool:
     scale = max(math.hypot(pts[9][0] - pts[0][0], pts[9][1] - pts[0][1]), 1.0)
     ratio = math.hypot(pts[4][0] - pts[8][0], pts[4][1] - pts[8][1]) / scale
@@ -401,9 +427,7 @@ def run_startup() -> bool:
             pts = smoother.smooth(raw, time.monotonic())
 
         # Estimate gestures
-        poing = _est_poing(pts, HAND['fist_fold_scale'],
-                           HAND['fist_tip_mid_ratio'],
-                           state.fist_min_folded) if pts else False
+        poing = _est_poing_adaptive(pts, state) if pts is not None else False
         pinch = _est_pinch(pts, state.pinch_ratio_on,
                            state.pinch_ratio_off) if pts else False
 
