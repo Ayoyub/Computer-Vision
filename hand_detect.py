@@ -21,7 +21,7 @@ from mediapipe.tasks import python
 from mediapipe.tasks.python import vision
 
 import td_render as td
-from config import HAND, DETECTION, SMOOTHING
+from config import HAND, DETECTION, SMOOTHING, HAND_CALIB
 from kalman_filter import LandmarkSmoother
 
 # ── Model ────────────────────────────────────────────────────────────────────────
@@ -162,7 +162,49 @@ def _hand_scale(pts) -> float:
     dx = pts[9][0] - pts[0][0]
     dy = pts[9][1] - pts[0][1]
     s = math.hypot(dx, dy)
+    # Use calibrated reference scale when available — it's more stable
+    # across camera distances than the instantaneous wrist-to-palm distance.
+    ref = HAND_CALIB.get('reference_scale_px', 0.0)
+    if ref > 0.0:
+        return ref
     return s if s > 1.0 else 1.0
+
+
+def calibrate_hand(landmarker, src, frames=30):
+    """
+    Measure the user's hand scale by reading `frames` frames from the
+    camera and taking the median wrist-to-middle-finger-base distance.
+    Stores the result in config.HAND_CALIB['reference_scale_px'].
+    """
+    import cv2
+    cap = cv2.VideoCapture(src)
+    cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
+    cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 360)
+    scales = []
+    for _ in range(frames):
+        ok, frame = cap.read()
+        if not ok:
+            break
+        rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+        mp_img = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb)
+        result = landmarker.detect_for_video(mp_img, int(time.time() * 1000))
+        if not result.hand_landmarks:
+            continue
+        lm = result.hand_landmarks[0]
+        dx = lm[9].x - lm[0].x
+        dy = lm[9].y - lm[0].y
+        s = math.hypot(dx, dy)
+        if s > 1.0:
+            scales.append(s)
+    cap.release()
+    if scales:
+        scales.sort()
+        ref = scales[len(scales) // 2]
+        HAND_CALIB['reference_scale_px'] = ref
+        print(f"  Hand calibrated: reference scale = {ref:.1f} px")
+        return ref
+    print("  Hand calibration: no frames captured, using instantaneous scale")
+    return 0.0
 
 
 def _est_poing_brut(pts) -> bool:
@@ -388,6 +430,10 @@ def hand_detect(img):
                                 _DEB_ON, _DEB_OFF, state.poing)
         state.pinch = _debounce(state.pinch_hist, _est_pincement_brut(pts, state),
                                 _DEB_ON, _DEB_OFF, state.pinch)
+        # Fist takes priority — when fingers are closed the thumb/index
+        # proximity can falsely trigger the pinch detector.
+        if state.poing:
+            state.pinch = False
 
         gestes = {'poing': state.poing, 'pincement': state.pinch}
         hand_data.append({

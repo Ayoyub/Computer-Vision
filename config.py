@@ -50,6 +50,14 @@ HAND = {
     'min_wrist_separation': 100,
 }
 
+# ── Hand calibration (measured at startup) ─────────────────────────────────────
+# reference_hand_scale is computed once during startup and used to normalise
+# gesture thresholds. The raw _hand_scale() is still used as a fallback when
+# calibration has not yet run (returns 1.0).
+HAND_CALIB = {
+    'reference_scale_px': 0.0,   # set at runtime by calibrate_hand()
+}
+
 GESTURE = {
     'double_fist_frames': 20,
     'finger_join_ratio': 0.20,

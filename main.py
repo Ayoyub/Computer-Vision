@@ -200,10 +200,11 @@ _menu_pyramid_ax = 0.0
 def _draw_dynamic_menu(img, cx, cy, hovered, cursor_x, cursor_y,
                        rotation_offset, options_list, icon_drawers=None):
     """
-    Dessine le menu rotatif avec icônes personnalisées par option.
-    Toutes les semi-transparences sont accumulées sur UNE seule couche
-    overlay puis composée en un seul addWeighted (performance).
-    icon_drawers : dict {label: callable} ou None pour les icônes standard.
+    Dessine le menu rotatif en style carrousel 3D (DS-style invisible carousel).
+    Les items sont projetés avec une profondeur simulée :
+      - L'item le plus proche du curseur est plus grand et plus lumineux
+      - Les items loin du curseur sont plus petits et plus foncés
+      - Ordre de rendu back-to-front pour l'effet de profondeur
     """
     global _menu_sphere_ay, _menu_sphere_ax, _menu_pyramid_ay, _menu_pyramid_ax
 
@@ -212,41 +213,116 @@ def _draw_dynamic_menu(img, cx, cy, hovered, cursor_x, cursor_y,
     cv2.circle(img, (cx, cy), 15, (100, 100, 100), 2, cv2.LINE_AA)
     cv2.circle(img, (cx, cy), 4, (255, 255, 255), -1, cv2.LINE_AA)
 
-    ov = img.copy()  # ← unique overlay pour tout le menu
+    # ── Déterminer l'angle du curseur ───────────────────────────────────────────
+    if cursor_x is not None and cursor_y is not None:
+        cursor_angle = (math.degrees(math.atan2(-(cursor_y - cy), cursor_x - cx)) + 360) % 360
+    else:
+        cursor_angle = None
 
-    if cursor_x and cursor_y:
-        cv2.line(ov, (cx, cy), (cursor_x, cursor_y), (255, 255, 255), 3, cv2.LINE_AA)
+    # ── Calculer la position 3D de chaque option ───────────────────────────────
+    n_opts = len(options_list)
+    if n_opts == 0:
+        return
 
+    ITEM_MIN_SCALE = 0.55   # échelle minimale pour les items en arrière-plan
+    ITEM_Y_SHIFT   = 18.0   # décalage vertical pour l'effet de profondeur
+    ITEM_GAP       = 360.0 / n_opts  # espacement angulaire entre items
+
+    # Build rendered items sorted back-to-front
+    rendered = []
     for i, opt in enumerate(options_list):
         label, base_angle, color = opt[0], opt[1], opt[2]
 
+        # Angle absolu de l'option sur le carrousel
         angle_deg = (base_angle + rotation_offset) % 360
         rad = math.radians(angle_deg)
-        ox = int(cx + MENU_RADIUS * math.cos(rad))
-        oy = int(cy - MENU_RADIUS * math.sin(rad))
-        hot = (i == hovered)
-        r = MENU_ICON_RADIUS + (8 if hot else 0)
 
-        # Ligne centre → bulle (dans le overlay, translucide)
-        cv2.line(ov, (cx, cy), (ox, oy), (80, 80, 80), 1, cv2.LINE_AA)
+        # Position de base sur le cercle
+        bx = cx + MENU_RADIUS * math.cos(rad)
+        by = cy - MENU_RADIUS * math.sin(rad)
 
-        # Glow (hot only) — accumulé dans l'overlay
-        if hot:
+        # Profondeur relative au curseur (0 = devant, 180 = derrière)
+        if cursor_angle is not None:
+            diff = min(abs(angle_deg - cursor_angle), 360 - abs(angle_deg - cursor_angle))
+        else:
+            diff = 180.0  # pas de curseur → milieu
+
+        # Normalisé : 0.0 (devant) → 1.0 (derrière)
+        depth_t = diff / 180.0
+        depth_t = max(0.0, min(1.0, depth_t))
+
+        # Facteur d'échelle et décalage Y (profondeur)
+        scale = 1.0 - depth_t * (1.0 - ITEM_MIN_SCALE)
+        y_shift = depth_t * ITEM_Y_SHIFT  # les items derrière remontent légèrement
+
+        r = int(MENU_ICON_RADIUS * scale)
+        ox = int(bx)
+        oy = int(by - y_shift)
+
+        is_hovered = (hovered == i)
+        # L'item sélectionné est toujours devant, même si le curseur est loin
+        if is_hovered and depth_t > 0.5:
+            depth_t = max(0.0, depth_t - 0.3)
+            scale = 1.0 - depth_t * (1.0 - ITEM_MIN_SCALE)
+            r = int(MENU_ICON_RADIUS * scale)
+            oy = int(by - (depth_t * ITEM_Y_SHIFT))
+
+        rendered.append({
+            'i': i, 'label': label, 'color': color,
+            'ox': ox, 'oy': oy, 'r': r,
+            'scale': scale, 'depth_t': depth_t,
+            'is_hovered': is_hovered,
+        })
+
+    # Tri back-to-front : les items les plus profonds (depth_t max) en premier
+    rendered.sort(key=lambda item: item['depth_t'], reverse=True)
+
+    ov = img.copy()
+    if cursor_x is not None and cursor_y is not None:
+        cv2.line(ov, (cx, cy), (cursor_x, cursor_y), (255, 255, 255), 3, cv2.LINE_AA)
+
+    for item in rendered:
+        i = item['i']
+        label = item['label']
+        color = item['color']
+        ox, oy, r = item['ox'], item['oy'], item['r']
+        scale = item['scale']
+        depth_t = item['depth_t']
+        hot = item['is_hovered']
+
+        # Couleur et opacité en fonction de la profondeur
+        depth_brightness = 0.4 + 0.6 * scale  # 0.4 (derrière) → 1.0 (devant)
+        fb_r = int(color[0] * depth_brightness)
+        fb_g = int(color[1] * depth_brightness)
+        fb_b = int(color[2] * depth_brightness)
+
+        # Ligne centre → bulle (dans le overlay, translucide, diminue avec la profondeur)
+        line_alpha = 0.3 + 0.5 * scale
+        lc = (int(80 * scale), int(80 * scale), int(80 * scale))
+        cv2.line(ov, (cx, cy), (ox, oy), lc, 1, cv2.LINE_AA)
+
+        # Glow (seulement si hover et devant)
+        if hot and depth_t < 0.6:
+            glow_intensity = 1.0 - depth_t
             for glow_r in (r + 12, r + 6, r + 3):
-                cv2.circle(ov, (ox, oy), glow_r, color, -1)
+                gc = (int(color[0] * glow_intensity), int(color[1] * glow_intensity),
+                      int(color[2] * glow_intensity))
+                cv2.circle(ov, (ox, oy), glow_r, gc, -1)
 
-        # Fond de bulle (semi-transparent, accumulé)
-        cv2.circle(ov, (ox, oy), r, color if hot else (40, 40, 40), -1)
+        # Fond de bulle (semi-transparent, accumulé dans l'overlay)
+        bg_color = (fb_r, fb_g, fb_b) if not hot else color
+        cv2.circle(ov, (ox, oy), r, bg_color, -1)
 
         # Contour (opaque, direct sur img)
-        cv2.circle(img, (ox, oy), r, color if hot else (120, 120, 120),
-                   2 if hot else 1, cv2.LINE_AA)
+        border_r = int(120 * depth_brightness)
+        cv2.circle(img, (ox, oy), r,
+                   color if hot else (border_r, border_r, border_r),
+                   2 if hot else int(1 * scale + 0.5), cv2.LINE_AA)
 
         # ── Icône dans la bulle (opaque, direct sur img) ────────────────────────
         if icon_drawers and label in icon_drawers:
             drawer = icon_drawers[label]
             if drawer is None:
-                # Icônes 3D animées (Sphere / Pyramid dans le menu shapes)
                 if label == "Sphere":
                     _draw_sphere_icon(img, ox, oy, r, color,
                                       _menu_sphere_ay, _menu_sphere_ax, hot)
@@ -261,16 +337,21 @@ def _draw_dynamic_menu(img, cx, cy, hovered, cursor_x, cursor_y,
                 main_drawer(img, ox, oy, r, color, hot)
 
         # Label texte sous la bulle (fond opaque sombre sur img, texte direct)
-        font, scale = cv2.FONT_HERSHEY_SIMPLEX, 0.45 if hot else 0.40
-        (tw, th), _ = cv2.getTextSize(label, font, scale, 1)
-        lx, ly = ox - tw // 2, oy + th // 2 + r + 15
-        cv2.rectangle(img, (lx - 6, ly - th - 6), (lx + tw + 6, ly + 6), (10, 10, 10), -1)
-        cv2.putText(img, label, (lx, ly), font, scale,
-                    (255, 255, 255) if hot else (170, 170, 170), 1, cv2.LINE_AA)
+        font, scale_f = cv2.FONT_HERSHEY_SIMPLEX, (0.45 if hot else 0.40) * scale + 0.1
+        scale_f = max(0.25, min(0.55, scale_f))
+        (tw, th), _ = cv2.getTextSize(label, font, scale_f, 1)
+        lx, ly = ox - tw // 2, oy + th // 2 + r + int(15 * scale)
+        cv2.rectangle(img, (lx - 6, ly - th - 6), (lx + tw + 6, ly + 6),
+                      (10, 10, 10), -1)
+        txt_color = (255, 255, 255) if hot else (int(170 * depth_brightness),
+                                                   int(170 * depth_brightness),
+                                                   int(170 * depth_brightness))
+        cv2.putText(img, label, (lx, ly), font, scale_f,
+                    txt_color, 1, cv2.LINE_AA)
 
     # Un seul addWeighted pour tout l'overlay du menu
     cv2.addWeighted(ov, 0.45, img, 0.55, 0, img)
-    if cursor_x and cursor_y:
+    if cursor_x is not None and cursor_y is not None:
         cv2.circle(img, (cursor_x, cursor_y), 8, (255, 255, 255), -1, cv2.LINE_AA)
 
 
@@ -330,7 +411,7 @@ def _draw_gesture_hints(img, poing, pincement, double_fist_progress, spawn_coold
 
 def _draw_hint(img):
     h, w = img.shape[:2]
-    hint = "close fist to open radial menu"
+    hint = "double-fist → open menu  |  point wrist  |  pinch to select"
     font, scale = cv2.FONT_HERSHEY_SIMPLEX, 0.36
     (tw, th), _ = cv2.getTextSize(hint, font, scale, 1)
     lx, ly = w // 2 - tw // 2, h - 14
@@ -538,10 +619,12 @@ def main():
         settings_gui.open_settings()
         sys.exit(0)
 
-    # ── Auto detection resolution ─────────────────────────────────────────────
-    # Pick the finest detection resolution the machine can sustain.
-    # Runs BEFORE the camera stream so it can use the camera without a second
-    # (conflicting) handle.
+    # ── Startup calibration screen ──────────────────────────────────────────────
+    import startup as _startup
+    if not _startup.run_startup():
+        sys.exit(0)
+
+    # ── Auto detection resolution (runs AFTER user sees camera feed) ─────────────
     if CAM.get('detect_auto', False):
         base_wh = (CAM['detect_w'], CAM['detect_h'])
         hi_wh   = (CAM['detect_hi_w'], CAM['detect_hi_h'])
@@ -552,6 +635,9 @@ def main():
     else:
         DETECT_W, DETECT_H = CAM['detect_w'], CAM['detect_h']
         print(f"Detection resolution: {DETECT_W}x{DETECT_H} (fixed)")
+
+    # ── Hand calibration ────────────────────────────────────────────────────────
+    # (removed — now done in startup.py GUI)
 
     cam = CameraStream(CAM['source'], DISPLAY_W, DISPLAY_H)
     det = DetectionThread()
@@ -564,6 +650,10 @@ def main():
     action = None
     menu_rotation = 0.0
     menu_rotation_frozen = 0.0   # rotation figée pendant que le menu est ouvert
+    menu_cursor_x = None          # wrist position used as the pointing cursor
+    menu_cursor_y = None
+    menu_double_fist_ctr = [0]    # double-fist counter for opening the menu
+    menu_menu_state = 'idle'      # idle | open | close_requested
 
     # ── Mode shapes ──────────────────────────────────────────────────────────────
     shapes = []
@@ -576,6 +666,9 @@ def main():
     shapes_active = False
     double_fist_counter = [0]
     last_touched_shape = None  # ref to most recently interacted shape
+    shape_menu_cursor_x = None
+    shape_menu_cursor_y = None
+    shape_menu_state = 'idle'       # idle | open | close_requested
 
     SX = DISPLAY_W / DETECT_W
     SY = DISPLAY_H / DETECT_H
@@ -630,22 +723,49 @@ def main():
             if shape_menu_phase != 1:
                 shape_menu_rotation = (shape_menu_rotation + 0.4) % 360
 
-            # ── FSM Menu principal ───────────────────────────────────────────────
+            # ── FSM Menu principal (3-state: idle → open → close_requested) ─────
+            both_fists_now = (hand_data is not None
+                              and len(hand_data) >= 2
+                              and hand_data[0]['gestes']['poing']
+                              and hand_data[1]['gestes']['poing'])
+
             if menu_phase == 0:
-                if hand_data and hand_data[0]['gestes']['poing']:
-                    pts = [(int(x * SX), int(y * SY)) for x, y in hand_data[0]['points']]
-                    menu_cx, menu_cy = pts[0]
-                    menu_phase = 1
-                    hovered_idx = -1
-                    # FIX: geler la rotation à l'instant d'ouverture
-                    menu_rotation_frozen = menu_rotation
-                _draw_hint(display)
+                if menu_menu_state == 'idle':
+                    if both_fists_now:
+                        menu_double_fist_ctr[0] += 1
+                        if menu_double_fist_ctr[0] >= GESTURE['double_fist_frames']:
+                            menu_cx, menu_cy = DISPLAY_W // 2, DISPLAY_H // 2
+                            menu_phase = 1
+                            menu_menu_state = 'open'
+                            hovered_idx = -1
+                            menu_cursor_x = menu_cursor_y = None
+                            menu_rotation_frozen = menu_rotation
+                            menu_double_fist_ctr[0] = 0
+                    else:
+                        menu_double_fist_ctr[0] = 0
+                        _draw_hint(display)
+                        gest.draw_double_fist_hint(display, menu_double_fist_ctr)
+
+                elif menu_menu_state == 'close_requested':
+                    if both_fists_now:
+                        menu_double_fist_ctr[0] += 1
+                        if menu_double_fist_ctr[0] >= GESTURE['double_fist_frames']:
+                            menu_phase = 0
+                            menu_menu_state = 'idle'
+                            menu_cursor_x = menu_cursor_y = None
+                            menu_double_fist_ctr[0] = 0
+                    else:
+                        # Released → go back to open (user changed mind)
+                        menu_menu_state = 'open'
+                        menu_double_fist_ctr[0] = 0
 
             elif menu_phase == 1:
+                # ── Menu open: wrist = cursor, pinch = confirm ────────────────────
                 if hand_data:
-                    poing = hand_data[0]['gestes']['poing']
+                    pincement = hand_data[0]['gestes']['pincement']
                     pts = [(int(x * SX), int(y * SY)) for x, y in hand_data[0]['points']]
                     wx, wy = pts[0]
+                    menu_cursor_x, menu_cursor_y = wx, wy
                     dist = _dist((wx, wy), (menu_cx, menu_cy))
 
                     if dist > MENU['open_deadzone']:
@@ -656,16 +776,27 @@ def main():
                         hovered_idx = -1
 
                     _draw_dynamic_menu(display, menu_cx, menu_cy,
-                                       hovered_idx, wx, wy,
+                                       hovered_idx, menu_cursor_x, menu_cursor_y,
                                        menu_rotation_frozen,
                                        MENU_OPTIONS)
 
-                    if not poing:
+                    if pincement:
+                        # Confirm selection
                         if hovered_idx != -1:
                             action = MENU_OPTIONS[hovered_idx][0]
                         menu_phase = 0
+                        menu_menu_state = 'idle'
+                        menu_cursor_x = menu_cursor_y = None
+                    elif not both_fists_now:
+                        # Released fists → enter close_requested (ignore held fists)
+                        menu_menu_state = 'close_requested'
+                        menu_double_fist_ctr[0] = 0
+                    # else: both_fists_now → ignore, user is just holding the menu open
                 else:
-                    menu_phase = 0
+                    # No hand → assume fists released
+                    if menu_menu_state == 'open':
+                        menu_menu_state = 'close_requested'
+                        menu_double_fist_ctr[0] = 0
 
             # ── Action dispatch ──────────────────────────────────────────────────
             if action == "Quit":
@@ -692,16 +823,6 @@ def main():
 
             # ── Shapes mode ──────────────────────────────────────────────────────
             if shapes_active and hand_data:
-                # ── Double-fist → back to menu ───────────────────────────────────
-                if gest.check_double_fist(hand_data, double_fist_counter):
-                    shapes_active = False
-                    menu_phase = 0
-                    shape_menu_phase = 0
-                    shape_hovered_idx = -1
-                    last_touched_shape = None
-
-                gest.draw_double_fist_hint(display, double_fist_counter)
-
                 # ── Two-hand scissor spread → last-touched shape rotation speed ──
                 spread_active, speed_mult, mid0, mid1 = \
                     gest.read_two_hand_spread(hand_data, SX, SY)
@@ -730,9 +851,6 @@ def main():
                         fists.append((ccx, ccy, hand['id']))
 
                 # 2. Gestion de l'état "saisie" des formes
-                #    FIX: verrouillage par ID STABLE (main_detect) et non par index
-                #    MediaPipe, ce qui évite de suivre la mauvaise main quand les
-                #    indices sont permutés d'un frame à l'autre.
                 hand_by_id = {hand['id']: hand for hand in hand_data}
                 for shape in shapes:
                     shape.pinches = []
@@ -759,28 +877,58 @@ def main():
                             last_touched_shape = shape  # track for spread gesture
                             break
 
-                # 3. Menu radial shapes
+                # 3. Menu radial shapes (invisible carousel: double-fist → pinch to select)
                 grabbing_something = any(s.pinches for s in shapes)
+                both_fists_now = (hand_data is not None
+                                  and len(hand_data) >= 2
+                                  and hand_data[0]['gestes']['poing']
+                                  and hand_data[1]['gestes']['poing'])
 
                 if shape_menu_phase == 0:
-                    if fists and not grabbing_something and len(shapes) < MAX_SHAPES:
-                        fx, fy, _ = fists[0]
-                        too_close = any(_dist((fx, fy), (s.x, s.y)) < s.radius * SPAWN_DIST
-                                        for s in shapes)
-                        if not too_close:
-                            shape_menu_cx, shape_menu_cy = fx, fy
-                            shape_menu_phase = 1
-                            shape_hovered_idx = -1
-                            # FIX: geler la rotation à l'ouverture
-                            shape_menu_rotation_frozen = shape_menu_rotation
+                    # ── Double-fist → open shapes spawn menu OR close shapes mode ─────
+                    if not grabbing_something and len(shapes) < MAX_SHAPES:
+                        if shape_menu_state == 'idle':
+                            if both_fists_now:
+                                double_fist_counter[0] += 1
+                                if double_fist_counter[0] >= GESTURE['double_fist_frames']:
+                                    shape_menu_cx, shape_menu_cy = DISPLAY_W // 2, DISPLAY_H // 2
+                                    shape_menu_phase = 1
+                                    shape_menu_state = 'open'
+                                    shape_hovered_idx = -1
+                                    shape_menu_cursor_x = shape_menu_cursor_y = None
+                                    shape_menu_rotation_frozen = shape_menu_rotation
+                                    double_fist_counter[0] = 0
+                            else:
+                                double_fist_counter[0] = 0
+                                gest.draw_double_fist_hint(display, double_fist_counter)
+                        elif shape_menu_state == 'close_requested':
+                            if both_fists_now:
+                                double_fist_counter[0] += 1
+                                if double_fist_counter[0] >= GESTURE['double_fist_frames']:
+                                    shapes_active = False
+                                    menu_phase = 0
+                                    shape_menu_phase = 0
+                                    shape_menu_state = 'idle'
+                                    shape_hovered_idx = -1
+                                    last_touched_shape = None
+                                    double_fist_counter[0] = 0
+                            else:
+                                # Released → go back to open
+                                shape_menu_state = 'open'
+                                double_fist_counter[0] = 0
+                    else:
+                        double_fist_counter[0] = 0
 
                 elif shape_menu_phase == 1:
-                    if fists:
-                        fx, fy, _ = fists[0]
-                        dist = _dist((fx, fy), (shape_menu_cx, shape_menu_cy))
+                    if hand_data:
+                        pincement = hand_data[0]['gestes']['pincement']
+                        pts = [(int(x * SX), int(y * SY)) for x, y in hand_data[0]['points']]
+                        wx, wy = pts[0]
+                        shape_menu_cursor_x, shape_menu_cursor_y = wx, wy
+                        dist = _dist((wx, wy), (shape_menu_cx, shape_menu_cy))
                         if dist > MENU['open_deadzone']:
                             shape_hovered_idx = _hovered_option_dynamic(
-                                fx, fy,
+                                wx, wy,
                                 shape_menu_cx, shape_menu_cy,
                                 shape_menu_rotation_frozen,
                                 SHAPE_OPTIONS)
@@ -790,21 +938,33 @@ def main():
                         _draw_dynamic_menu(
                             display,
                             shape_menu_cx, shape_menu_cy,
-                            shape_hovered_idx, fx, fy,
+                            shape_hovered_idx, shape_menu_cursor_x, shape_menu_cursor_y,
                             shape_menu_rotation_frozen,
                             SHAPE_OPTIONS,
-                            icon_drawers=_SHAPE_ICON_DRAWERS)  # icônes formes
+                            icon_drawers=_SHAPE_ICON_DRAWERS)
 
+                        # Pinch to confirm selection
+                        if pincement:
+                            if shape_hovered_idx != -1:
+                                label, _, _, ShapeClass, default_radius = \
+                                    SHAPE_OPTIONS[shape_hovered_idx]
+                                if ShapeClass is not None:
+                                    shapes.append(ShapeClass(
+                                        shape_menu_cx, shape_menu_cy, default_radius))
+                                    spawn_cooldown_frames = 30
+                            shape_menu_phase = 0
+                            shape_menu_state = 'idle'
+                            shape_hovered_idx = -1
+                            shape_menu_cursor_x = shape_menu_cursor_y = None
+                        elif not both_fists_now:
+                            # Released fists → enter close_requested (ignore held fists)
+                            shape_menu_state = 'close_requested'
+                            double_fist_counter[0] = 0
+                        # else: both_fists_now → ignore, user is just holding the menu open
                     else:
-                        if shape_hovered_idx != -1:
-                            label, _, _, ShapeClass, default_radius = \
-                                SHAPE_OPTIONS[shape_hovered_idx]
-                            if ShapeClass is not None:
-                                shapes.append(ShapeClass(
-                                    shape_menu_cx, shape_menu_cy, default_radius))
-                                spawn_cooldown_frames = 30  # half-second cooldown visual
-                        shape_menu_phase = 0
-                        shape_hovered_idx = -1
+                        if shape_menu_state == 'open':
+                            shape_menu_state = 'close_requested'
+                            double_fist_counter[0] = 0
 
                 # 4. Suppression par triple pincement
                 for shape in shapes:
