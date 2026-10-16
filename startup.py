@@ -368,16 +368,11 @@ def run_startup() -> bool:
     Show the startup calibration screen.
     Returns True if the user confirmed and wants to launch the main app.
     """
-    cap = cv2.VideoCapture(CAM['source'])
-    cap.set(cv2.CAP_PROP_FRAME_WIDTH,  CAM['display_w'])
-    cap.set(cv2.CAP_PROP_FRAME_HEIGHT, CAM['display_h'])
-    cap.set(cv2.CAP_PROP_FPS, CAM.get('camera_fps', 60))
-
     state    = _StartupState()
     smoother = LandmarkSmoother()
     fps_frames, fps_time, current_fps = 0, time.monotonic(), 0.0
 
-    # Open camera with retry (probe loop causes V4L2 device contention)
+    # Open camera with retry
     cap = _open_camera(CAM['source'], CAM['display_w'], CAM['display_h'],
                        CAM.get('camera_fps', 60))
     if cap is None:
